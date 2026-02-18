@@ -28,6 +28,22 @@ A lightweight Go utility to automate the creation of MariaDB databases and users
     ./db-tool -f <file.txt>   # Batch processing from file
     ```
 
+## Batch Processing
+
+For bulk operations, the tool accepts a plain text file. Create a file (e.g., `list.txt`) with one entry per line:
+
+```text
+example.com
+myproject.io
+test-db.local
+```
+
+### Run the batch command
+
+```bash
+./db-tool -f list.txt
+```
+
 ## Output & Logging
 
 ### Accounts.csv
