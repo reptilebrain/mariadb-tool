@@ -1,2 +1,6 @@
 mariadb-tool
 *.csv
+config.ini
+error.log
+db-tool
+lista.txt
