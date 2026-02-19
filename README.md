@@ -1,5 +1,7 @@
 # MariaDB User & Database Creator
 
+See [CHANGELOG.md](CHANGELOG.md) for version history.
+
 A security-focused Go CLI tool for safely creating paired MariaDB
 databases and users.
 
