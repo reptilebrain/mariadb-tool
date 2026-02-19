@@ -1,85 +1,198 @@
 # MariaDB User & Database Creator
 
-A lightweight Go utility to automate the creation of MariaDB databases and users with random secure passwords.
+A security-focused Go CLI tool for safely creating paired MariaDB
+databases and users.
+
+This tool is designed with a **fail-closed philosophy**:\
+If anything unexpected exists, nothing is modified.
+
+------------------------------------------------------------------------
+
+## Design Principles
+
+-   **Fail Closed** -- If either the database or user already exists,
+    creation is aborted.
+-   **Idempotent** -- Safe to run repeatedly.
+-   **Deterministic Naming** -- Domain inputs are normalized into valid
+    identifiers.
+-   **No Partial State** -- If creation fails mid-process, cleanup is
+    automatically performed.
+-   **No Secrets in Logs** -- Passwords are never written to
+    `error.log`.
+
+------------------------------------------------------------------------
 
 ## Features
 
-- **Strict Safety:** Checks if **both** the user and the database already exist before execution to prevent data loss or password overwriting.
-- **Improved Syntax:** Uses SQL backticks to support complex database names (e.g., `my.domain.com`).
-- **Secure Passwords:** Generates 16-character secure passwords.
-- **Flexible Input:** Supports single commands or bulk batch processing via text files.
-- **Automatic Logging:** - Successful credentials are saved to `accounts.csv`.
-  - Errors and skips are logged to `error.log`.
-- **Easy Config:** Generates a template `config.ini` on the first run or via the `-i` flag.
+### Safety & Policy
 
-## Installation & Usage
+-   Separate checks for database and user existence
+-   Strict input validation
+-   Optional domain name normalization (enabled by default)
+-   Wildcard host (`%`) disabled by default
+-   Automatic rollback if `CREATE USER` or `GRANT` fails
+-   Timeout protection for DB operations
 
-1. **Build the binary:**
+### Naming & Normalization
 
-    ```bash
-    go build -o db-tool
-    ```
+With `-normalize` (enabled by default):
 
-2. **Usage:**
+    example.com       → example_com
+    shop.example.io  → shop_example_io
 
-    ```bash
-    ./db-tool -i              # Initialize configuration
-    ./db-tool -c <name>       # Create single database/user
-    ./db-tool -f <file.txt>   # Batch processing from file
-    ```
+Invalid inputs (e.g. `invalid name!!`) are rejected.
 
-## Batch Processing
+Maximum identifier length is 64 characters.\
+Long names are truncated with a short hash suffix.
 
-For bulk operations, the tool accepts a plain text file. Create a file (e.g., `list.txt`) with one entry per line:
+### Passwords
 
-```text
-example.com
-myproject.io
-test-db.local
+-   20 characters
+-   Alphanumeric + selected symbols
+-   No characters that break SQL literals
+
+### Execution Modes
+
+-   Single creation (`-c`)
+-   Batch mode (`-f`)
+-   Dry-run mode (`-dry-run`)
+-   Config initialization (`-i`)
+
+------------------------------------------------------------------------
+
+## Installation
+
+``` bash
+go build -o mariadb-tool
 ```
 
-### Run the batch command
+------------------------------------------------------------------------
 
-```bash
-./db-tool -f list.txt
+## Usage
+
+Initialize configuration:
+
+``` bash
+./mariadb-tool -i
 ```
 
-## Output & Logging
+Create a single database/user:
 
-### Accounts.csv
-
-Every successful creation is logged to `accounts.csv`. This file is automatically created with headers if it doesn't exist. It uses the following format:
-
-| Timestamp | Database | Username | Password |
-| :--- | :--- | :--- | :--- |
-| 2026-02-18 20:15 | my_db | my_db | aB1#cDe2fG3!hI4j |
-
-### Error log
-
-```bash
-[2026-02-18 20:19:11] Skipping 'yourdomain.com': database or user already exists
+``` bash
+./mariadb-tool -c example.com
 ```
+
+Dry run:
+
+``` bash
+./mariadb-tool -dry-run -c example.com
+```
+
+Batch processing:
+
+``` bash
+./mariadb-tool -f list.txt
+```
+
+Allow wildcard host (explicit opt-in):
+
+``` bash
+./mariadb-tool -allow-wildcard-host -user-host "%" -c example.com
+```
+
+------------------------------------------------------------------------
+
+## Batch File Format
+
+Plain text, one entry per line:
+
+    example.com
+    shop.example.com
+    test-site.io
+
+Comments (`#` or `;`) and blank lines are ignored.
+
+------------------------------------------------------------------------
 
 ## Configuration
 
-The tool uses a config.ini file for database credentials:
+`config.ini`:
 
-```ini
-    [mariadb]
-    username=admin
-    password=your_secure_password
-    hostname=localhost
-    port=3306
+``` ini
+[mariadb]
+username=admin
+password=your_secure_password
+hostname=localhost
+port=3306
 ```
 
-## Contributing
+The file is created with `0600` permissions.
 
-This project is feature-complete for my needs. If you'd like to add new features or make changes, feel free to fork the repository!
+------------------------------------------------------------------------
 
-## Disclaimer
+## Logging
 
-Use at your own risk. This tool is provided "as is" without any warranty. The authors are not responsible for any data loss, security breaches, or service interruptions caused by the use of this software. Always test in a staging environment before running against a production database.
+### error.log
+
+Logs:
+
+-   Validation failures
+-   SQL errors
+-   Skipped operations
+-   Batch line numbers
+
+Passwords are never logged.
+
+### accounts.csv (optional)
+
+Credentials are only exported if `-export-csv` is used.
+
+Format:
+
+  Timestamp   Database   Username   Password
+  ----------- ---------- ---------- ----------
+
+------------------------------------------------------------------------
+
+## Security Model
+
+This tool:
+
+-   Does not overwrite existing users
+-   Does not modify existing databases
+-   Does not escalate privileges
+-   Does not allow wildcard hosts unless explicitly enabled
+-   Cleans up partially created resources on failure
+
+It is intended for administrative automation, not multi-tenant
+self-service.
+
+------------------------------------------------------------------------
+
+## Testing
+
+Tested against MariaDB using isolated Docker environments.
+
+Scenarios verified:
+
+-   Normal creation
+-   Existing DB
+-   Existing user
+-   Privilege failure with automatic rollback
+-   Invalid input rejection
+-   Wildcard host enforcement
+
+------------------------------------------------------------------------
 
 ## License
 
-This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
+GNU General Public License v3.0 or later (GPL-3.0-or-later).
+
+See the `LICENSE` file for details.
+
+------------------------------------------------------------------------
+
+## Disclaimer
+
+Provided as-is without warranty.\
+Always test against a staging environment before production use.

@@ -1,5 +1,18 @@
-*.csv
+# Binary
+mariadb-tool
+
+# Local config
 config.ini
+test-config.ini
+test-config-dbonly.ini
+
+# Exports & logs
+*.csv
 error.log
-db-tool
+
+# Local test files
 lista.txt
+
+# OS junk
+.DS_Store
+Thumbs.db

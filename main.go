@@ -1,209 +1,132 @@
+// mariadb-tool
+// Copyright (C) 2026 P-A Jonasson
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY.
+//
+// See the LICENSE file in the project root for details.
+
 package main
 
 import (
-	"bufio"
-	"database/sql"
-	"encoding/csv"
 	"flag"
 	"fmt"
 	"log"
-	"math/rand"
-	"os"
 	"strings"
-	"time"
-
-	_ "github.com/go-sql-driver/mysql"
 )
 
 func main() {
-	createFlag := flag.String("c", "", "Create single database/user")
-	listFlag := flag.String("f", "", "Batch processing from file")
-	initFlag := flag.Bool("i", false, "Initialize configuration")
+	opts := parseFlags()
 
-	flag.Usage = func() {
-		fmt.Println("Usage:")
-		fmt.Println("  -c <name>      Create single database/user")
-		fmt.Println("  -f <file.txt>  Batch processing from file")
-		fmt.Println("  -i             Initialize configuration")
-	}
-
-	flag.Parse()
-
-	if *initFlag || !configFileExists() {
-		initializeConfig()
-		if *initFlag {
+	if opts.Init || !configFileExists(opts.ConfigPath) {
+		if err := initializeConfig(opts.ConfigPath); err != nil {
+			log.Fatalf("Config init failed: %v", err)
+		}
+		if opts.Init {
 			return
 		}
 	}
 
-	config, err := loadConfig("config.ini")
+	cfg, err := loadConfig(opts.ConfigPath, "mariadb")
 	if err != nil {
 		log.Fatalf("Error reading config: %v", err)
 	}
 
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/", config["username"], config["password"], config["hostname"], config["port"])
-	db, err := sql.Open("mysql", dsn)
+	db, err := openDB(cfg, opts.Timeout)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("DB connect failed: %v", err)
 	}
 	defer db.Close()
 
-	if *createFlag != "" {
-		processDatabase(db, *createFlag)
-	} else if *listFlag != "" {
-		processFile(db, *listFlag)
-	} else {
+	switch {
+	case opts.CreateName != "":
+		name := strings.TrimSpace(opts.CreateName)
+		res, err := processDatabase(db, opts, name)
+		if err != nil {
+			logError(opts.ErrorLogPath, err.Error())
+			log.Fatalf("Failed: %v", err)
+		}
+		printResult(opts, res)
+
+	case opts.FileList != "":
+		if err := processFile(db, opts, opts.FileList); err != nil {
+			logError(opts.ErrorLogPath, err.Error())
+			log.Fatalf("Batch failed: %v", err)
+		}
+
+	default:
 		flag.Usage()
 	}
 }
 
-func loadConfig(filename string) (map[string]string, error) {
-	config := make(map[string]string)
-	file, err := os.Open(filename)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
+func parseFlags() Options {
+	var opts Options
 
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "[") {
-			continue
-		}
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) == 2 {
-			config[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
-		}
+	flag.StringVar(&opts.CreateName, "c", "", "Create single database/user (name)")
+	flag.StringVar(&opts.FileList, "f", "", "Batch processing from file (one name per line)")
+	flag.BoolVar(&opts.Init, "i", false, "Initialize configuration")
+
+	flag.StringVar(&opts.ConfigPath, "config", configFilename, "Path to config.ini")
+	flag.StringVar(&opts.UserHost, "user-host", "localhost", "Host part for created user (e.g. localhost)")
+	flag.BoolVar(&opts.AllowWildcardHost, "allow-wildcard-host", false, "Allow host wildcards in -user-host (%, _)")
+
+	flag.DurationVar(&opts.Timeout, "timeout", defaultTimeout, "Timeout per DB operation (e.g. 6s, 10s)")
+	flag.BoolVar(&opts.ExportCSV, "export-csv", false, "Export created credentials to CSV (unsafe; opt-in)")
+	flag.StringVar(&opts.CSVPath, "csv", csvName, "CSV output path (used with -export-csv)")
+	flag.StringVar(&opts.ErrorLogPath, "error-log", errorLogName, "Error log path")
+	flag.BoolVar(&opts.DryRun, "dry-run", false, "Show what would be done, but do not execute changes")
+
+	flag.BoolVar(&opts.Normalize, "normalize", true, "Normalize input names (e.g. hardhq.com -> hardhq_com)")
+
+	flag.Usage = func() {
+		fmt.Println("Usage:")
+		fmt.Println("  -c <name>      Create single database/user")
+		fmt.Println("  -f <file.txt>  Batch processing from file (one name per line)")
+		fmt.Println("  -i             Initialize configuration")
+		fmt.Println("")
+		fmt.Println("Options:")
+		flag.PrintDefaults()
 	}
-	return config, scanner.Err()
+
+	flag.Parse()
+
+	if opts.CSVPath == "" {
+		opts.CSVPath = csvName
+	}
+	if opts.ErrorLogPath == "" {
+		opts.ErrorLogPath = errorLogName
+	}
+	if opts.ConfigPath == "" {
+		opts.ConfigPath = configFilename
+	}
+
+	return opts
 }
 
-func configFileExists() bool {
-	_, err := os.Stat("config.ini")
-	return !os.IsNotExist(err)
-}
-
-func initializeConfig() {
-	if configFileExists() {
-		fmt.Print("config.ini already exists. Overwrite? (y/N): ")
-		var confirm string
-		fmt.Scanln(&confirm)
-		if strings.ToLower(confirm) != "y" {
-			return
-		}
-	}
-
-	var user, pass, host, port string
-	fmt.Print("Enter MariaDB root username [root]: ")
-	fmt.Scanln(&user)
-	if user == "" {
-		user = "root"
-	}
-	fmt.Print("Enter MariaDB root password: ")
-	fmt.Scanln(&pass)
-	fmt.Print("Enter MariaDB hostname [localhost]: ")
-	fmt.Scanln(&host)
-	if host == "" {
-		host = "localhost"
-	}
-	fmt.Print("Enter MariaDB port [3306]: ")
-	fmt.Scanln(&port)
-	if port == "" {
-		port = "3306"
-	}
-
-	content := fmt.Sprintf("[mariadb]\nusername=%s\npassword=%s\nhostname=%s\nport=%s\n", user, pass, host, port)
-	os.WriteFile("config.ini", []byte(content), 0600)
-	fmt.Println("✅ config.ini created and secured.")
-}
-
-func logError(msg string) {
-	f, err := os.OpenFile("error.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	logLine := fmt.Sprintf("[%s] %s\n", time.Now().Format("2006-01-02 15:04:05"), msg)
-	f.WriteString(logLine)
-}
-
-func processDatabase(db *sql.DB, name string) {
-	var dbExists string
-	dbErr := db.QueryRow("SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?", name).Scan(&dbExists)
-	var userExists int
-	_ = db.QueryRow("SELECT COUNT(*) FROM mysql.user WHERE user = ? AND host = 'localhost'", name).Scan(&userExists)
-
-	if dbErr == nil || userExists > 0 {
-		msg := fmt.Sprintf("Skipping '%s': database or user already exists", name)
-		fmt.Printf("⚠️  %s\n", msg)
-		logError(msg)
+func printResult(opts Options, res *CreateResult) {
+	if res == nil {
 		return
 	}
 
-	password := generatePassword(16)
-	_, err := db.Exec(fmt.Sprintf("CREATE DATABASE `%s`", name))
-	if err != nil {
-		msg := fmt.Sprintf("Error creating database %s: %v", name, err)
-		fmt.Println("❌", msg)
-		logError(msg)
-		return
+	if opts.Normalize && res.RequestedName != "" && res.RequestedName != res.Name {
+		fmt.Printf("   Requested: %s\n   Normalized: %s\n", res.RequestedName, res.Name)
 	}
 
-	_, err = db.Exec(fmt.Sprintf("CREATE USER '%s'@'localhost' IDENTIFIED BY '%s'", name, password))
-	if err != nil {
-		msg := fmt.Sprintf("Error creating user %s: %v", name, err)
-		fmt.Println("❌", msg)
-		logError(msg)
-		return
-	}
-
-	_, err = db.Exec(fmt.Sprintf("GRANT ALL PRIVILEGES ON `%s`.* TO '%s'@'localhost'", name, name))
-	if err != nil {
-		msg := fmt.Sprintf("Error granting privileges for %s: %v", name, err)
-		fmt.Println("❌", msg)
-		logError(msg)
-		return
-	}
-
-	fmt.Printf("✅ Success: %s created.\n", name)
-	saveToCSV(name, name, password)
-}
-
-func processFile(db *sql.DB, filename string) {
-	content, err := os.ReadFile(filename)
-	if err != nil {
-		log.Fatal(err)
-	}
-	lines := strings.Split(string(content), "\n")
-	for _, line := range lines {
-		name := strings.TrimSpace(line)
-		if name != "" {
-			processDatabase(db, name)
+	switch res.Status {
+	case StatusSkipped:
+		fmt.Printf("⚠️  %s\n", res.Message)
+	case StatusDryRun:
+		fmt.Printf("✅ DRY-RUN OK: %s\n", res.Name)
+	case StatusCreated:
+		fmt.Printf("✅ Success: %s created.\n", res.Name)
+		fmt.Printf("   Username: %s\n   Host:     %s\n   Password: %s\n", res.Username, res.UserHost, res.Password)
+		if opts.ExportCSV && res.CSVExported {
+			fmt.Printf("   Exported:  %s\n", opts.CSVPath)
 		}
 	}
-}
-
-func generatePassword(n int) string {
-	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!#%&"
-	b := make([]byte, n)
-	for i := range b {
-		b[i] = letters[rand.Intn(len(letters))]
-	}
-	return string(b)
-}
-
-func saveToCSV(dbName, userName, password string) {
-	f, err := os.OpenFile("accounts.csv", os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	info, _ := f.Stat()
-	w := csv.NewWriter(f)
-	if info.Size() == 0 {
-		w.Write([]string{"Timestamp", "Database", "Username", "Password"})
-	}
-	w.Write([]string{time.Now().Format("2006-01-02 15:04"), dbName, userName, password})
-	w.Flush()
 }
