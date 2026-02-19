@@ -21,20 +21,31 @@ import (
 	"time"
 )
 
-const (
-	configFilename = "config.ini"
-	errorLogName   = "error.log"
-	csvName        = "accounts.csv"
-)
+func logError(path, msg string) {
+	if path == "" {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(path), 0700)
+
+	// 0600: log may contain sensitive operational info
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	logLine := fmt.Sprintf("[%s] %s\n", time.Now().Format("2006-01-02 15:04:05"), msg)
+	_, _ = f.WriteString(logLine)
+}
 
 func saveToCSV(path, dbName, userName, password string) error {
-	dir := filepath.Dir(path)
-	if dir != "." {
-		if err := os.MkdirAll(dir, 0700); err != nil {
-			return err
-		}
+	if path == "" {
+		return fmt.Errorf("csv path is empty")
 	}
 
+	_ = os.MkdirAll(filepath.Dir(path), 0700)
+
+	// 0600: CSV contains credentials
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return err
@@ -52,25 +63,16 @@ func saveToCSV(path, dbName, userName, password string) error {
 			return err
 		}
 	}
+
 	if err := w.Write([]string{
 		time.Now().Format("2006-01-02 15:04"),
-		dbName, userName, password,
+		dbName,
+		userName,
+		password,
 	}); err != nil {
 		return err
 	}
+
 	w.Flush()
 	return w.Error()
-}
-
-func logError(path string, msg string) {
-	_ = os.MkdirAll(filepath.Dir(path), 0700)
-
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-
-	logLine := fmt.Sprintf("[%s] %s\n", time.Now().Format("2006-01-02 15:04:05"), msg)
-	_, _ = f.WriteString(logLine)
 }

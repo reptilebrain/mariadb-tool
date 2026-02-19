@@ -15,12 +15,58 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
-
-	"golang.org/x/term"
 )
+
+const appName = "mariadb-tool"
+
+type DefaultPaths struct {
+	ConfigPath string
+	ErrorLog   string
+	CSVPath    string
+}
+
+func xdgDir(envVar string, fallbackParts ...string) (string, error) {
+	if v := strings.TrimSpace(os.Getenv(envVar)); v != "" {
+		return v, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	parts := append([]string{home}, fallbackParts...)
+	return filepath.Join(parts...), nil
+}
+
+func defaultPaths() (DefaultPaths, error) {
+	cfgHome, err := xdgDir("XDG_CONFIG_HOME", ".config")
+	if err != nil {
+		return DefaultPaths{}, err
+	}
+	dataHome, err := xdgDir("XDG_DATA_HOME", ".local", "share")
+	if err != nil {
+		return DefaultPaths{}, err
+	}
+	stateHome, err := xdgDir("XDG_STATE_HOME", ".local", "state")
+	if err != nil {
+		return DefaultPaths{}, err
+	}
+
+	return DefaultPaths{
+		ConfigPath: filepath.Join(cfgHome, appName, "config.ini"),
+		CSVPath:    filepath.Join(dataHome, appName, "accounts.csv"),
+		ErrorLog:   filepath.Join(stateHome, appName, "error.log"),
+	}, nil
+}
+
+func ensureParentDir(path string, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	return os.MkdirAll(dir, mode)
+}
 
 func configFileExists(path string) bool {
 	_, err := os.Stat(path)
@@ -28,51 +74,60 @@ func configFileExists(path string) bool {
 }
 
 func loadConfig(filename, section string) (map[string]string, error) {
-	cfg := make(map[string]string)
+	config := make(map[string]string)
 
-	f, err := os.Open(filename)
+	file, err := os.Open(filename)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer file.Close()
 
-	wantSection := strings.ToLower(strings.TrimSpace(section))
-	curSection := ""
+	wantSection := "[" + section + "]"
+	inSection := false
 
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
 			continue
 		}
-		if strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
-			continue
-		}
+
 		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-			curSection = strings.ToLower(strings.TrimSpace(line[1 : len(line)-1]))
+			inSection = strings.EqualFold(line, wantSection)
 			continue
 		}
-		if curSection != wantSection {
+		if !inSection {
 			continue
 		}
+
 		parts := strings.SplitN(line, "=", 2)
 		if len(parts) != 2 {
 			continue
 		}
 		k := strings.TrimSpace(parts[0])
 		v := strings.TrimSpace(parts[1])
-		cfg[k] = v
+		if k != "" {
+			config[k] = v
+		}
 	}
 
-	if err := sc.Err(); err != nil {
+	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
-	return cfg, nil
+	if len(config) == 0 {
+		return nil, fmt.Errorf("missing or empty section [%s] in %s", section, filename)
+	}
+	return config, nil
 }
 
 func initializeConfig(path string) error {
+	if err := ensureParentDir(path, 0700); err != nil {
+		return err
+	}
+
+	// If exists: ask before overwrite (simple CLI confirm)
 	if configFileExists(path) {
-		fmt.Print("config.ini already exists. Overwrite? (y/N): ")
+		fmt.Printf("%s already exists. Overwrite? (y/N): ", path)
 		var confirm string
 		fmt.Scanln(&confirm)
 		if strings.ToLower(strings.TrimSpace(confirm)) != "y" {
@@ -80,45 +135,45 @@ func initializeConfig(path string) error {
 		}
 	}
 
-	user := promptDefault("Enter MariaDB username", "root")
-	pass, err := promptSecret("Enter MariaDB password")
-	if err != nil {
-		return err
+	var user, pass, host, port string
+	fmt.Print("Enter MariaDB root username [root]: ")
+	fmt.Scanln(&user)
+	if strings.TrimSpace(user) == "" {
+		user = "root"
 	}
-	host := promptDefault("Enter MariaDB hostname", "localhost")
-	port := promptDefault("Enter MariaDB port", "3306")
+
+	fmt.Print("Enter MariaDB root password: ")
+	fmt.Scanln(&pass)
+
+	fmt.Print("Enter MariaDB hostname [localhost]: ")
+	fmt.Scanln(&host)
+	if strings.TrimSpace(host) == "" {
+		host = "localhost"
+	}
+
+	fmt.Print("Enter MariaDB port [3306]: ")
+	fmt.Scanln(&port)
+	if strings.TrimSpace(port) == "" {
+		port = "3306"
+	}
 
 	content := fmt.Sprintf(
 		"[mariadb]\nusername=%s\npassword=%s\nhostname=%s\nport=%s\n",
 		user, pass, host, port,
 	)
 
-	return os.WriteFile(path, []byte(content), 0600)
+	// 0600 because it contains creds
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		return err
+	}
+
+	fmt.Printf("✅ %s created (0600).\n", path)
+	return nil
 }
 
-func promptDefault(label, def string) string {
-	fmt.Printf("%s [%s]: ", label, def)
-	var v string
-	fmt.Scanln(&v)
-	v = strings.TrimSpace(v)
-	if v == "" {
-		return def
+func validateNotEmptyPaths(p DefaultPaths) error {
+	if p.ConfigPath == "" || p.ErrorLog == "" || p.CSVPath == "" {
+		return errors.New("internal error: empty default paths")
 	}
-	return v
-}
-
-func promptSecret(label string) (string, error) {
-	fmt.Printf("%s: ", label)
-	fd := int(os.Stdin.Fd())
-	if !term.IsTerminal(fd) {
-		var v string
-		fmt.Scanln(&v)
-		return strings.TrimSpace(v), nil
-	}
-	b, err := term.ReadPassword(fd)
-	fmt.Println()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(b)), nil
+	return nil
 }
