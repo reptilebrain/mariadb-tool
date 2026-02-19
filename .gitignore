@@ -16,3 +16,4 @@ lista.txt
 # OS junk
 .DS_Store
 Thumbs.db
+.markdownlint.json

@@ -96,9 +96,11 @@ Allow wildcard host (explicit opt-in):
 
 Plain text, one entry per line:
 
-    example.com
-    shop.example.com
-    test-site.io
+``` text
+example.com
+shop.example.com
+test-site.io
+```
 
 Comments (`#` or `;`) and blank lines are ignored.
 
