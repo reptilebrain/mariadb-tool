@@ -21,7 +21,7 @@ import (
 
 func TestValidateIdentifier(t *testing.T) {
 	ok := []string{"abc", "ABC_123", "user_01", "a0_b1"}
-	bad := []string{"", " ", "a-b", "a b", "a;DROP", "`x`", "åäö", "x.y", "x/y"}
+	bad := []string{"", " ", "a-b", "a b", "a;DROP", "`x`", "éè", "x.y", "x/y"}
 
 	for _, s := range ok {
 		if err := validateIdentifier(s); err != nil {

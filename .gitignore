@@ -1,14 +1,21 @@
 # Binary
 mariadb-tool
+*.exe
+*.test
 
 # Local config
 config.ini
 test-config.ini
 test-config-dbonly.ini
+.env
+.env.*
 
 # Exports & logs
 *.csv
 error.log
+*.log
+coverage.out
+*.coverprofile
 
 # Local test files
 lista.txt
@@ -16,4 +23,12 @@ lista.txt
 # OS junk
 .DS_Store
 Thumbs.db
+
+# Editor / IDE
+.idea/
+.vscode/
+
+# Build / temp
+dist/
+tmp/
 .markdownlint.json

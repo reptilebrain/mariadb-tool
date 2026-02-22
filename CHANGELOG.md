@@ -12,19 +12,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
--   Docker-baserat integrationstest mot riktig MariaDB
--   Opt-in integrationstest mot lokal MariaDB på `localhost` via DSN
--   Dokumenterade testkommandon för unit-, Docker- och localhost-integration
+-   Docker-based integration test against real MariaDB
+-   Opt-in integration test against local MariaDB on `localhost` via DSN
+-   Documented test commands for unit, Docker, and localhost integration
 
 ### Improved
 
--   Validering av `-timeout` (måste vara större än 0)
--   Tydligare felrapportering om rollback misslyckas
+-   Validation of `-timeout` (must be greater than 0)
+-   Clearer error reporting when rollback fails
 
 ### Security
 
--   Rollback körs i eget context med separat timeout för att undvika partiellt state vid timeout
--   Interaktiv lösenordsinmatning i config-init är nu dold i terminalen
+-   Rollback now runs in its own context with a separate timeout to reduce partial state risk on timeout
+-   Interactive password input in config initialization is now hidden in terminal
 
 ------------------------------------------------------------------------
 

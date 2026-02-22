@@ -28,7 +28,7 @@ func TestGeneratePassword(t *testing.T) {
 		t.Fatalf("unexpected length: %d, %d", len(p1), len(p2))
 	}
 	if p1 == p2 {
-		// astronomiskt osannolikt, men testet är ok som röd flagga
+		// Extremely unlikely, but still a useful red flag in tests.
 		t.Fatalf("passwords equal; expected randomness")
 	}
 }
