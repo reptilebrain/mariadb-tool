@@ -230,6 +230,12 @@ Tested against MariaDB using isolated Docker environments.
 -   **Integration** (`.github/workflows/integration.yml`) runs nightly and can also be started manually from GitHub Actions.
 -   **Release** (`.github/workflows/release.yml`) runs on tag pushes (`v*`) and publishes cross-platform build archives to the GitHub release.
 
+## Project Operations
+
+-   Issue templates are available for bug reports and feature requests (`.github/ISSUE_TEMPLATE/`).
+-   Pull requests use a default review checklist (`.github/pull_request_template.md`).
+-   Maintainer process and release operations are documented in [`MAINTAINING.md`](MAINTAINING.md).
+
 Run unit tests:
 
 ``` bash
