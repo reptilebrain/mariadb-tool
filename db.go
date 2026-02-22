@@ -28,6 +28,7 @@ import (
 )
 
 var defaultTimeout = 6 * time.Second
+var rollbackTimeout = 3 * time.Second
 
 type Options struct {
 	CreateName        string
@@ -62,6 +63,13 @@ type CreateResult struct {
 	Password      string
 	Message       string
 	CSVExported   bool
+}
+
+func validateOptions(opts Options) error {
+	if opts.Timeout <= 0 {
+		return fmt.Errorf("invalid timeout %s: must be > 0", opts.Timeout)
+	}
+	return nil
 }
 
 func openDB(cfg map[string]string, timeout time.Duration) (*sql.DB, error) {
@@ -199,6 +207,9 @@ func processDatabase(db *sql.DB, opts Options, inputName string) (*CreateResult,
 	if opts.UserHost == "" {
 		opts.UserHost = "localhost"
 	}
+	if opts.Timeout <= 0 {
+		opts.Timeout = defaultTimeout
+	}
 
 	requested := strings.TrimSpace(inputName)
 	if requested == "" {
@@ -273,8 +284,11 @@ func processDatabase(db *sql.DB, opts Options, inputName string) (*CreateResult,
 		" IDENTIFIED BY '" + escapeSQLStringLiteral(pw) + "'"
 
 	if err := execSQL(ctx, db, createUserSQL); err != nil {
-		_ = execSQL(ctx, db, "DROP DATABASE "+quoteIdent(name))
-		return nil, fmt.Errorf("create user %s: %w", quoteUserHost(name, opts.UserHost), err)
+		createUserErr := fmt.Errorf("create user %s: %w", quoteUserHost(name, opts.UserHost), err)
+		if rbErr := execRollbackSQL(db, "DROP DATABASE "+quoteIdent(name)); rbErr != nil {
+			return nil, fmt.Errorf("%v; rollback failed dropping database %s: %w", createUserErr, name, rbErr)
+		}
+		return nil, createUserErr
 	}
 
 	// GRANT
@@ -282,9 +296,14 @@ func processDatabase(db *sql.DB, opts Options, inputName string) (*CreateResult,
 		".* TO " + quoteUserHost(name, opts.UserHost)
 
 	if err := execSQL(ctx, db, grantSQL); err != nil {
-		_ = execSQL(ctx, db, "DROP USER "+quoteUserHost(name, opts.UserHost))
-		_ = execSQL(ctx, db, "DROP DATABASE "+quoteIdent(name))
-		return nil, fmt.Errorf("grant privileges for %s: %w", name, err)
+		grantErr := fmt.Errorf("grant privileges for %s: %w", name, err)
+		if rbUserErr := execRollbackSQL(db, "DROP USER "+quoteUserHost(name, opts.UserHost)); rbUserErr != nil {
+			return nil, fmt.Errorf("%v; rollback failed dropping user %s: %w", grantErr, quoteUserHost(name, opts.UserHost), rbUserErr)
+		}
+		if rbDBErr := execRollbackSQL(db, "DROP DATABASE "+quoteIdent(name)); rbDBErr != nil {
+			return nil, fmt.Errorf("%v; rollback failed dropping database %s: %w", grantErr, name, rbDBErr)
+		}
+		return nil, grantErr
 	}
 
 	res.Status = StatusCreated
@@ -361,4 +380,10 @@ func processFile(db *sql.DB, opts Options, filename string) error {
 func execSQL(ctx context.Context, db *sql.DB, query string) error {
 	_, err := db.ExecContext(ctx, query)
 	return err
+}
+
+func execRollbackSQL(db *sql.DB, query string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), rollbackTimeout)
+	defer cancel()
+	return execSQL(ctx, db, query)
 }

@@ -17,9 +17,12 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"golang.org/x/term"
 )
 
 const appName = "mariadb-tool"
@@ -142,8 +145,11 @@ func initializeConfig(path string) error {
 		user = "root"
 	}
 
-	fmt.Print("Enter MariaDB root password: ")
-	fmt.Scanln(&pass)
+	var err error
+	pass, err = readSecret("Enter MariaDB root password: ")
+	if err != nil {
+		return fmt.Errorf("read password: %w", err)
+	}
 
 	fmt.Print("Enter MariaDB hostname [localhost]: ")
 	fmt.Scanln(&host)
@@ -169,6 +175,26 @@ func initializeConfig(path string) error {
 
 	fmt.Printf("✅ %s created (0600).\n", path)
 	return nil
+}
+
+func readSecret(prompt string) (string, error) {
+	fmt.Print(prompt)
+	fd := int(os.Stdin.Fd())
+	if term.IsTerminal(fd) {
+		b, err := term.ReadPassword(fd)
+		fmt.Println()
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(string(b)), nil
+	}
+
+	var s string
+	_, err := fmt.Scanln(&s)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	return strings.TrimSpace(s), nil
 }
 
 func validateNotEmptyPaths(p DefaultPaths) error {

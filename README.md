@@ -217,6 +217,18 @@ self-service.
 
 Tested against MariaDB using isolated Docker environments.
 
+Run unit tests:
+
+``` bash
+go test ./...
+```
+
+Run integration test (requires Docker):
+
+``` bash
+MARIADB_TOOL_INTEGRATION=1 go test ./... -run TestProcessDatabaseMariaDBIntegration -count=1
+```
+
 Scenarios verified:
 
 -   Normal creation

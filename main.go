@@ -22,6 +22,10 @@ import (
 
 func main() {
 	opts := parseFlags()
+	if err := validateOptions(opts); err != nil {
+		logError(opts.ErrorLogPath, fmt.Sprintf("Invalid options: %v", err))
+		log.Fatalf("Invalid options: %v", err)
+	}
 
 	// Init or missing config => init (at XDG default unless overridden)
 	if opts.Init || !configFileExists(opts.ConfigPath) {
