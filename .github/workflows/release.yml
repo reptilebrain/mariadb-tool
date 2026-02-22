@@ -9,8 +9,8 @@ permissions:
   contents: write
 
 jobs:
-  build-and-release:
-    name: Build and Publish Artifacts
+  build:
+    name: Build Artifacts
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -57,7 +57,25 @@ jobs:
           archive="dist/mariadb-tool_${VERSION}_${GOOS}_${GOARCH}.tar.gz"
           tar -C "dist" -czf "${archive}" "mariadb-tool_${VERSION}_${GOOS}_${GOARCH}"
 
-      - name: Upload release assets
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mariadb-tool_${{ github.ref_name }}_${{ matrix.goos }}_${{ matrix.goarch }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Publish Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish release assets
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*.tar.gz
