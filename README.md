@@ -229,6 +229,14 @@ Run integration test (requires Docker):
 MARIADB_TOOL_INTEGRATION=1 go test ./... -run TestProcessDatabaseMariaDBIntegration -count=1
 ```
 
+Run integration test against local MariaDB (`localhost`):
+
+``` bash
+MARIADB_TOOL_LOCAL_INTEGRATION=1 \
+MARIADB_TOOL_LOCAL_DSN='root:your_password@tcp(127.0.0.1:3306)/' \
+go test ./... -run TestProcessDatabaseLocalMariaDBIntegration -count=1
+```
+
 Scenarios verified:
 
 -   Normal creation
