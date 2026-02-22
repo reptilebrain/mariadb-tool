@@ -1,0 +1,54 @@
+name: Feature request
+description: Propose an enhancement
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an improvement.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What user/problem does this solve?
+      placeholder: Describe the practical problem.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What change do you want?
+      placeholder: Describe the desired behavior or API.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      placeholder: Any alternatives or tradeoffs?
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact and risks
+      description: Security, rollback behavior, compatibility, docs/tests impact
+      placeholder: |
+        Security:
+        Rollback/partial state:
+        Backward compatibility:
+        Test impact:
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I checked existing issues and discussions first.
+          required: true
+        - label: This proposal does not require exposing secrets in logs/output.
+          required: true
