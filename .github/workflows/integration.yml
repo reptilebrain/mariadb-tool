@@ -1,0 +1,26 @@
+name: Integration
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"
+
+jobs:
+  docker-integration:
+    name: Docker Integration Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run Docker integration test
+        env:
+          MARIADB_TOOL_INTEGRATION: "1"
+        run: go test ./... -run TestProcessDatabaseMariaDBIntegration -count=1 -v

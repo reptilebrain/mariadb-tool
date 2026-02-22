@@ -1,0 +1,63 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build and Publish Artifacts
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build archive
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          bin="mariadb-tool"
+          if [ "${GOOS}" = "windows" ]; then
+            bin="${bin}.exe"
+          fi
+
+          out_dir="dist/mariadb-tool_${VERSION}_${GOOS}_${GOARCH}"
+          mkdir -p "${out_dir}"
+
+          CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "${out_dir}/${bin}" .
+
+          archive="dist/mariadb-tool_${VERSION}_${GOOS}_${GOARCH}.tar.gz"
+          tar -C "dist" -czf "${archive}" "mariadb-tool_${VERSION}_${GOOS}_${GOARCH}"
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.tar.gz

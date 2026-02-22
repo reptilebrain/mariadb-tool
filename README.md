@@ -1,6 +1,8 @@
 # MariaDB User & Database Creator
 
 [![CI](https://github.com/reptilebrain/mariadb-tool/actions/workflows/ci.yml/badge.svg)](https://github.com/reptilebrain/mariadb-tool/actions/workflows/ci.yml)
+[![Integration](https://github.com/reptilebrain/mariadb-tool/actions/workflows/integration.yml/badge.svg)](https://github.com/reptilebrain/mariadb-tool/actions/workflows/integration.yml)
+[![Release Workflow](https://github.com/reptilebrain/mariadb-tool/actions/workflows/release.yml/badge.svg)](https://github.com/reptilebrain/mariadb-tool/actions/workflows/release.yml)
 [![Release](https://img.shields.io/github/v/tag/reptilebrain/mariadb-tool?sort=semver)](https://github.com/reptilebrain/mariadb-tool/releases)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/reptilebrain/mariadb-tool)](https://go.dev/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
@@ -221,6 +223,12 @@ self-service.
 ## Testing
 
 Tested against MariaDB using isolated Docker environments.
+
+## Automation
+
+-   **CI** (`.github/workflows/ci.yml`) runs on push to `main` and pull requests (`go vet`, `go test ./...`).
+-   **Integration** (`.github/workflows/integration.yml`) runs nightly and can also be started manually from GitHub Actions.
+-   **Release** (`.github/workflows/release.yml`) runs on tag pushes (`v*`) and publishes cross-platform build archives to the GitHub release.
 
 Run unit tests:
 
