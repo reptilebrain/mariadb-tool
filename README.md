@@ -1,5 +1,10 @@
 # MariaDB User & Database Creator
 
+[![CI](https://github.com/reptilebrain/mariadb-tool/actions/workflows/ci.yml/badge.svg)](https://github.com/reptilebrain/mariadb-tool/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/tag/reptilebrain/mariadb-tool?sort=semver)](https://github.com/reptilebrain/mariadb-tool/releases)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/reptilebrain/mariadb-tool)](https://go.dev/)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+
 See [CHANGELOG.md](CHANGELOG.md) for version history.
 
 A security-focused Go CLI tool for safely creating paired MariaDB
