@@ -24,7 +24,10 @@ func connectionConfig(values map[string]string, timeout time.Duration) (*mysql.C
 	cfg.Timeout, cfg.ReadTimeout, cfg.WriteTimeout = timeout, timeout, timeout
 	cfg.ParseTime = true
 	cfg.Loc = time.Local
-	cfg.Params = map[string]string{"charset": "utf8mb4"}
+	// Config.Params is for server system variables. Putting "charset" there
+	// becomes SET charset=..., which MariaDB rejects with error 1193. Use the
+	// driver's collation field instead; utf8mb4_general_ci is broadly supported.
+	cfg.Collation = "utf8mb4_general_ci"
 	mode := strings.ToLower(values["tls"])
 	if mode == "" {
 		mode = "auto"
