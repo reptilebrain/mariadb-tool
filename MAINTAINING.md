@@ -5,7 +5,7 @@ This document describes how to maintain this repository safely and consistently.
 ## Core Quality Rules
 
 - Keep project-facing text in English (`README`, `CHANGELOG`, release notes, templates).
-- Preserve fail-closed behavior and no-partial-state guarantees.
+- Preserve fail-closed behavior and bounded best-effort reconciliation; never claim atomic DDL.
 - Never log credentials or other secrets.
 - Keep tests and automation green before merging or releasing.
 
@@ -23,7 +23,12 @@ This document describes how to maintain this repository safely and consistently.
 Run locally before opening PR:
 
 ```bash
+gofmt -w .
+go mod tidy
+go vet ./...
 go test ./... -count=1
+CGO_ENABLED=1 go test -race ./...
+go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 ```
 
 Optional local integration against localhost MariaDB:
@@ -45,9 +50,9 @@ go test ./... -run TestProcessDatabaseMariaDBIntegration -count=1 -v
 
 - `CI` workflow:
   - Trigger: push to `main`, pull requests
-  - Runs `go vet` and unit tests
+  - Runs vet, unit/race tests, format/module checks, and govulncheck
 - `Integration` workflow:
-  - Trigger: nightly schedule and manual dispatch
+  - Trigger: code/module/workflow pushes to main and PRs, nightly, manual
   - Runs Docker-backed MariaDB integration test
 - `Release` workflow:
   - Trigger: tag push matching `v*`
@@ -66,7 +71,7 @@ git push origin vX.Y.Z
 ```
 
 5. Verify in GitHub Actions that `Release` workflow succeeds.
-6. Verify GitHub Release contains expected archives.
+6. Verify GitHub Release contains all five expected archives and SHA256SUMS; run `sha256sum -c SHA256SUMS` after download.
 7. Publish release notes (can be based on changelog section).
 
 ## Hotfix Process
@@ -83,3 +88,20 @@ git push origin vX.Y.Z
 - If a rollback path changes, add or update tests.
 - Treat credential handling changes as high-risk; require explicit review.
 - Do not include secrets in tests, logs, examples, or issue discussions.
+
+
+## Security release review
+
+- Recommend a major release (2.0.0) for the normalization migration and stricter
+  remote TLS/config permission defaults. Never rename legacy resources implicitly.
+- Use trusted private output directories; Windows users must configure NTFS ACLs.
+- Coordinate external MariaDB administration: advisory locks protect participating
+  tool invocations, not arbitrary clients. Network uncertainty can outlive cleanup.
+- Race tests require a C compiler and CGO_ENABLED=1.
+- Docker integration requires a running daemon, not just a docker executable.
+- Actions are pinned to verified commits. Verify upstream tags before changing pins.
+- Only the release publishing job receives contents: write.
+- Documentation-only changes skip CI via path filters; do not configure skipped
+  workflows as unconditional required checks without accounting for that behavior.
+- A successful local cross-build does not verify GitHub permissions or actual
+  asset publication; verify these on the next authorized release.

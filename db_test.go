@@ -5,103 +5,337 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"github.com/go-sql-driver/mysql"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 )
 
-var (
-	rollbackDriverOnce  sync.Once
-	rollbackDriverState *rollbackState
-)
-
-type rollbackState struct {
-	rollbackCalled int32
+type fakeState struct {
+	acquireErr               error
+	lockKeys                 []string
+	mu                       sync.Mutex
+	database, user           bool
+	failure                  string
+	cause                    error
+	applyFailure             bool
+	dropUserFail, dropDBFail bool
+	verifyFail               bool
+	lockLost                 bool
+	calls                    []string
+	deadlines                []time.Duration
+	delay                    time.Duration
 }
+type fakeConnector struct{ state *fakeState }
 
-type rollbackDriver struct{}
+func (c fakeConnector) Connect(context.Context) (driver.Conn, error) { return &fakeConn{c.state}, nil }
+func (c fakeConnector) Driver() driver.Driver                        { return fakeDriver{} }
 
-type rollbackConn struct {
-	state *rollbackState
-}
+type fakeDriver struct{}
 
-type emptyRows struct{}
+func (fakeDriver) Open(string) (driver.Conn, error) { return nil, errors.New("use connector") }
 
-func (d rollbackDriver) Open(_ string) (driver.Conn, error) {
-	return &rollbackConn{state: rollbackDriverState}, nil
-}
+type fakeConn struct{ state *fakeState }
 
-func (c *rollbackConn) Prepare(_ string) (driver.Stmt, error) {
-	return nil, errors.New("not implemented")
-}
-func (c *rollbackConn) Close() error              { return nil }
-func (c *rollbackConn) Begin() (driver.Tx, error) { return nil, errors.New("not implemented") }
+func (c *fakeConn) Prepare(string) (driver.Stmt, error) { return nil, errors.New("not implemented") }
+func (c *fakeConn) Close() error                        { return nil }
+func (c *fakeConn) Begin() (driver.Tx, error)           { return nil, errors.New("not implemented") }
 
-func (c *rollbackConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
-	if strings.Contains(query, "information_schema.SCHEMATA") || strings.Contains(query, "information_schema.USER_PRIVILEGES") {
-		return emptyRows{}, nil
+type fakeRows struct{ values []driver.Value }
+
+func (r *fakeRows) Columns() []string { return []string{"v"} }
+func (r *fakeRows) Close() error      { return nil }
+func (r *fakeRows) Next(dest []driver.Value) error {
+	if len(r.values) == 0 {
+		return io.EOF
 	}
-	return nil, errors.New("unexpected query: " + query)
+	dest[0] = r.values[0]
+	r.values = r.values[1:]
+	return nil
 }
-
-func (c *rollbackConn) ExecContext(ctx context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
+func (c *fakeConn) QueryContext(ctx context.Context, q string, args []driver.NamedValue) (driver.Rows, error) {
+	s := c.state
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	var value driver.Value
 	switch {
-	case strings.HasPrefix(query, "CREATE DATABASE "):
-		return driver.RowsAffected(1), nil
-	case strings.HasPrefix(query, "CREATE USER "):
-		time.Sleep(30 * time.Millisecond)
-		if err := ctx.Err(); err != nil {
-			return nil, err
+	case strings.Contains(q, "GET_LOCK"):
+		s.lockKeys = append(s.lockKeys, args[0].Value.(string))
+		if s.acquireErr != nil {
+			return nil, s.acquireErr
 		}
-		return nil, errors.New("forced create user failure")
-	case strings.HasPrefix(query, "DROP DATABASE "):
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if _, ok := ctx.Deadline(); !ok {
-			return nil, errors.New("rollback context missing deadline")
-		}
-		atomic.StoreInt32(&c.state.rollbackCalled, 1)
-		return driver.RowsAffected(1), nil
+		value = int64(1)
+	case strings.Contains(q, "RELEASE_LOCK"):
+		value = int64(1)
+	case strings.Contains(q, "IS_USED_LOCK"):
+		value = !(s.lockLost && len(s.calls) > 0)
 	default:
-		return nil, errors.New("unexpected exec: " + query)
+		if s.verifyFail && len(s.calls) > 0 {
+			return nil, io.EOF
+		}
+		if d, ok := ctx.Deadline(); ok {
+			s.deadlines = append(s.deadlines, time.Until(d))
+		} else {
+			return nil, errors.New("missing deadline")
+		}
+		if strings.Contains(q, "SCHEMATA") {
+			if s.database {
+				value = "example"
+			}
+		} else if strings.Contains(q, "mysql.user") {
+			if s.user {
+				value = int64(1)
+			}
+		} else {
+			return nil, errors.New("unexpected query")
+		}
+	}
+	if value == nil {
+		return &fakeRows{}, nil
+	}
+	return &fakeRows{[]driver.Value{value}}, nil
+}
+func (c *fakeConn) ExecContext(ctx context.Context, q string, _ []driver.NamedValue) (driver.Result, error) {
+	s := c.state
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, q)
+	d, ok := ctx.Deadline()
+	if !ok {
+		return nil, errors.New("missing deadline")
+	}
+	s.deadlines = append(s.deadlines, time.Until(d))
+	failed := s.failure != "" && strings.HasPrefix(q, s.failure)
+	if !failed || s.applyFailure {
+		switch {
+		case strings.HasPrefix(q, "CREATE DATABASE"):
+			s.database = true
+		case strings.HasPrefix(q, "CREATE USER"):
+			s.user = true
+		case strings.HasPrefix(q, "DROP USER"):
+			if !s.dropUserFail {
+				s.user = false
+			}
+		case strings.HasPrefix(q, "DROP DATABASE"):
+			if !s.dropDBFail {
+				s.database = false
+			}
+		}
+	}
+	if strings.HasPrefix(q, "DROP USER") && s.dropUserFail {
+		return nil, io.EOF
+	}
+	if strings.HasPrefix(q, "DROP DATABASE") && s.dropDBFail {
+		return nil, io.EOF
+	}
+	if failed {
+		return nil, s.cause
+	}
+	if s.delay > 0 && strings.HasPrefix(q, "CREATE") {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(s.delay):
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return driver.RowsAffected(1), nil
+}
+func fakeDB(t *testing.T, s *fakeState) *sql.DB {
+	t.Helper()
+	db := sql.OpenDB(fakeConnector{s})
+	t.Cleanup(func() { db.Close() })
+	return db
+}
+func TestReconciliationFailures(t *testing.T) {
+	for _, stage := range []string{"CREATE DATABASE", "CREATE USER", "GRANT"} {
+		for _, cause := range []error{errors.New("server rejected SQL with secret"), io.EOF, context.DeadlineExceeded} {
+			for _, applied := range []bool{false, true} {
+				t.Run(stage+"/"+cause.Error()+"/"+map[bool]string{true: "applied", false: "not-applied"}[applied], func(t *testing.T) {
+					s := &fakeState{failure: stage, cause: cause, applyFailure: applied}
+					_, err := processDatabase(fakeDB(t, s), Options{Timeout: time.Second}, "example")
+					if err == nil {
+						t.Fatal("expected failure")
+					}
+					if strings.Contains(err.Error(), "secret") {
+						t.Fatal("secret leaked")
+					}
+					if s.database || s.user {
+						t.Fatalf("partial state remains: %v", err)
+					}
+					drops := strings.Join(s.calls, "\n")
+					if !strings.Contains(drops, "DROP DATABASE") {
+						t.Fatal("database cleanup not attempted")
+					}
+					if stage != "CREATE DATABASE" && !strings.Contains(drops, "DROP USER") {
+						t.Fatal("user cleanup not attempted")
+					}
+				})
+			}
+		}
+	}
+}
+func TestReconciliationAllFailuresReported(t *testing.T) {
+	s := &fakeState{failure: "GRANT", cause: io.EOF, dropUserFail: true, dropDBFail: true}
+	_, err := processDatabase(fakeDB(t, s), Options{Timeout: time.Second}, "example")
+	for _, want := range []string{"cleanup user", "cleanup database", "user remains", "database remains"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("missing %q: %v", want, err)
+		}
+	}
+}
+func TestReconciliationVerificationFailures(t *testing.T) {
+	s := &fakeState{failure: "GRANT", cause: io.EOF, verifyFail: true}
+	_, err := processDatabase(fakeDB(t, s), Options{Timeout: time.Second}, "example")
+	for _, want := range []string{"verify user cleanup", "verify database cleanup"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("missing %s: %v", want, err)
+		}
+	}
+}
+func TestPreexistingResourcesUntouched(t *testing.T) {
+	for _, s := range []*fakeState{{database: true}, {user: true}, {database: true, user: true}} {
+		res, err := processDatabase(fakeDB(t, s), Options{Timeout: time.Second}, "example")
+		if err != nil || res.Status != StatusSkipped || len(s.calls) != 0 {
+			t.Fatalf("modified preexisting state: %v", err)
+		}
+	}
+}
+func TestAlreadyExistsRacePreservesResource(t *testing.T) {
+	for _, tc := range []struct {
+		stage  string
+		number uint16
+	}{{"CREATE DATABASE", 1007}, {"CREATE USER", 1396}} {
+		s := &fakeState{failure: tc.stage, cause: &mysql.MySQLError{Number: tc.number}, applyFailure: true}
+		_, err := processDatabase(fakeDB(t, s), Options{Timeout: time.Second}, "example")
+		if err == nil {
+			t.Fatal("expected conflict")
+		}
+		if tc.number == 1007 && !s.database {
+			t.Fatal("removed conflicting database")
+		}
+		if tc.number == 1396 && !s.user {
+			t.Fatal("removed conflicting user")
+		}
+	}
+}
+func TestIndependentOperationTimeouts(t *testing.T) {
+	s := &fakeState{delay: 40 * time.Millisecond}
+	res, err := processDatabase(fakeDB(t, s), Options{Timeout: 70 * time.Millisecond}, "example")
+	if err != nil || res.Status != StatusCreated {
+		t.Fatalf("operations shared a timeout: %v", err)
+	}
+	for _, remaining := range s.deadlines {
+		if remaining < 50*time.Millisecond {
+			t.Fatalf("stale operation deadline: %s", remaining)
+		}
+	}
+}
+func TestCleanupAfterExpiredOperation(t *testing.T) {
+	s := &fakeState{delay: 30 * time.Millisecond}
+	_, err := processDatabase(fakeDB(t, s), Options{Timeout: 10 * time.Millisecond}, "example")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("wrong error: %v", err)
+	}
+	if s.database || s.user {
+		t.Fatal("cleanup inherited canceled context")
+	}
+}
+func TestLostLockWithholdsDestructiveCleanup(t *testing.T) {
+	s := &fakeState{failure: "CREATE DATABASE", cause: io.EOF, applyFailure: true, lockLost: true}
+	_, err := processDatabase(fakeDB(t, s), Options{Timeout: time.Second}, "example")
+	if err == nil || !strings.Contains(err.Error(), "withheld") || !s.database {
+		t.Fatalf("unsafe lock handling: %v", err)
+	}
+}
+func TestBatchPartialFailure(t *testing.T) {
+	dir := t.TempDir()
+	input := filepath.Join(dir, "list.txt")
+	os.WriteFile(input, []byte("bad name\nexample\nexample\n"), 0600)
+	s := &fakeState{}
+	output := captureStdout(t, func() {
+		err := processFile(fakeDB(t, s), Options{Timeout: time.Second, ErrorLogPath: filepath.Join(dir, "error.log")}, input)
+		if err == nil {
+			t.Fatal("batch must return error")
+		}
+	})
+	if !strings.Contains(output, "Created: 1\nSkipped: 1\nFailed: 1") {
+		t.Fatalf("bad summary: %s", output)
+	}
+	log, err := os.ReadFile(filepath.Join(dir, "error.log"))
+	if err != nil || !strings.Contains(string(log), "Line 1") {
+		t.Fatal("missing error log")
+	}
+}
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stdout
+	f, err := os.CreateTemp(t.TempDir(), "stdout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = f
+	defer func() { os.Stdout = old; f.Close() }()
+	fn()
+	os.Stdout = old
+	if _, err := f.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	b, err := io.ReadAll(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+func TestGrantEscapesDatabaseWildcards(t *testing.T) {
+	s := &fakeState{}
+	_, err := processDatabase(fakeDB(t, s), Options{Timeout: time.Second}, "example_db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(s.calls[2], "example\\_db") {
+		t.Fatal("GRANT underscores must be literal")
 	}
 }
 
-func (emptyRows) Columns() []string           { return []string{"v"} }
-func (emptyRows) Close() error                { return nil }
-func (emptyRows) Next(_ []driver.Value) error { return io.EOF }
-
-func TestProcessDatabaseRollbackUsesIndependentContext(t *testing.T) {
-	rollbackDriverOnce.Do(func() {
-		sql.Register("rollback_test_driver", rollbackDriver{})
-	})
-
-	state := &rollbackState{}
-	rollbackDriverState = state
-
-	db, err := sql.Open("rollback_test_driver", "")
-	if err != nil {
-		t.Fatalf("sql open: %v", err)
+func TestUncertainLockAcquisitionDiscardsConnection(t *testing.T) {
+	s := &fakeState{acquireErr: io.EOF}
+	db := fakeDB(t, s)
+	if _, err := processDatabase(db, Options{Timeout: time.Second}, "example"); err == nil {
+		t.Fatal("expected lock error")
 	}
-	defer db.Close()
-
-	opts := Options{
-		UserHost: "localhost",
-		Timeout:  10 * time.Millisecond,
+	if len(s.calls) != 0 {
+		t.Fatal("DDL executed without lock")
 	}
-
-	_, err = processDatabase(db, opts, "example_db")
-	if err == nil {
-		t.Fatal("expected processDatabase error")
+	if db.Stats().Idle != 0 {
+		t.Fatal("uncertain lock connection returned to pool")
 	}
-	if strings.Contains(err.Error(), "rollback failed") {
-		t.Fatalf("rollback should succeed with independent context, got: %v", err)
+}
+func TestCaseVariantsUseSameLock(t *testing.T) {
+	s := &fakeState{}
+	db := fakeDB(t, s)
+	for _, name := range []string{"Example", "example"} {
+		if _, err := processDatabase(db, Options{Timeout: time.Second}, name); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if atomic.LoadInt32(&state.rollbackCalled) != 1 {
-		t.Fatal("expected rollback DROP DATABASE to be executed")
+	if len(s.lockKeys) != 2 || s.lockKeys[0] != s.lockKeys[1] {
+		t.Fatal("case variants bypass name lock")
+	}
+}
+func TestFailedUserDropStillRemovesDatabase(t *testing.T) {
+	s := &fakeState{failure: "GRANT", cause: io.EOF, dropUserFail: true}
+	_, err := processDatabase(fakeDB(t, s), Options{Timeout: time.Second}, "example")
+	if err == nil || s.database || !s.user {
+		t.Fatalf("incorrect cleanup state: %v", err)
 	}
 }

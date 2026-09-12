@@ -24,7 +24,7 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
 )
 
 var defaultTimeout = 6 * time.Second
@@ -42,6 +42,9 @@ type Options struct {
 	CSVPath           string
 	ErrorLogPath      string
 	DryRun            bool
+	TLS               string
+	TLSCA             string
+	Socket            string
 	Normalize         bool
 }
 
@@ -73,29 +76,22 @@ func validateOptions(opts Options) error {
 }
 
 func openDB(cfg map[string]string, timeout time.Duration) (*sql.DB, error) {
-	user := cfg["username"]
-	pass := cfg["password"]
-	host := cfg["hostname"]
-	port := cfg["port"]
-
-	if user == "" || host == "" || port == "" {
-		return nil, fmt.Errorf("config missing required fields (username/hostname/port)")
-	}
-
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/?charset=utf8mb4&parseTime=true&loc=Local",
-		user, pass, host, port)
-
-	db, err := sql.Open("mysql", dsn)
+	driverCfg, err := connectionConfig(cfg, timeout)
 	if err != nil {
 		return nil, err
 	}
+	connector, err := mysql.NewConnector(driverCfg)
+	if err != nil {
+		return nil, safeDBError(err)
+	}
+	db := sql.OpenDB(connector)
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
-		return nil, err
+		return nil, safeDBError(err)
 	}
 
 	return db, nil
@@ -151,14 +147,10 @@ func escapeSQLStringLiteral(s string) string {
 ================================= */
 
 func userExists(ctx context.Context, db *sql.DB, user, host string) (bool, error) {
-	grantee := fmt.Sprintf("'%s'@'%s'", user, host)
 
 	var one int
 	err := db.QueryRowContext(ctx,
-		`SELECT 1
-		 FROM information_schema.USER_PRIVILEGES
-		 WHERE GRANTEE = ?
-		 LIMIT 1`, grantee,
+		"SELECT 1 FROM mysql.user WHERE User = ? AND Host = ? LIMIT 1", user, host,
 	).Scan(&one)
 
 	if err == nil {
@@ -170,40 +162,13 @@ func userExists(ctx context.Context, db *sql.DB, user, host string) (bool, error
 	return false, err
 }
 
-func dbOrUserExists(ctx context.Context, db *sql.DB, name, host string) (bool, bool, error) {
-
-	// Check database existence
-	var tmp string
-	dbErr := db.QueryRowContext(ctx,
-		"SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?",
-		name,
-	).Scan(&tmp)
-
-	var dbExists bool
-	switch {
-	case dbErr == nil:
-		dbExists = true
-	case errors.Is(dbErr, sql.ErrNoRows):
-		dbExists = false
-	default:
-		return false, false, fmt.Errorf("check db exists: %w", dbErr)
-	}
-
-	// Check user existence via information_schema
-	uExists, err := userExists(ctx, db, name, host)
-	if err != nil {
-		return false, false, fmt.Errorf("check user exists: %w", err)
-	}
-
-	return dbExists, uExists, nil
-}
-
 /* ===============================
    Main creation logic
 ================================= */
 
 func processDatabase(db *sql.DB, opts Options, inputName string) (*CreateResult, error) {
 
+	opts.UserHost = strings.TrimSpace(opts.UserHost)
 	if opts.UserHost == "" {
 		opts.UserHost = "localhost"
 	}
@@ -240,12 +205,18 @@ func processDatabase(db *sql.DB, opts Options, inputName string) (*CreateResult,
 		UserHost:      opts.UserHost,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), opts.Timeout)
-	defer cancel()
-
-	dbExists, userExists, err := dbOrUserExists(ctx, db, name, opts.UserHost)
+	lock, err := acquireNameLock(db, name, opts.Timeout)
 	if err != nil {
 		return nil, err
+	}
+	defer lock.close()
+	dbExists, err := databaseExistsTimed(db, name, opts.Timeout)
+	if err != nil {
+		return nil, fmt.Errorf("check database: %w", safeDBError(err))
+	}
+	userExists, err := userExistsTimed(db, name, opts.UserHost, opts.Timeout)
+	if err != nil {
+		return nil, fmt.Errorf("check user: %w", safeDBError(err))
 	}
 
 	if dbExists || userExists {
@@ -274,36 +245,43 @@ func processDatabase(db *sql.DB, opts Options, inputName string) (*CreateResult,
 		return res, nil
 	}
 
-	// CREATE DATABASE
-	if err := execSQL(ctx, db, "CREATE DATABASE "+quoteIdent(name)); err != nil {
-		return nil, fmt.Errorf("create database %s: %w", name, err)
+	// The absence snapshot is taken under a separate advisory-lock connection.
+	// Mark attempts before executing: a lost response does not prove failure.
+	attemptedDB, attemptedUser := false, false
+	fail := func(stage string, cause error) (*CreateResult, error) {
+		return nil, errors.Join(fmt.Errorf("%s: %w", stage, safeDBError(cause)),
+			reconcile(db, lock, name, opts.UserHost, attemptedDB, attemptedUser))
 	}
-
-	// CREATE USER
+	if err := lock.check(); err != nil {
+		return fail("creation lock lost", err)
+	}
+	attemptedDB = true
+	if err := execTimedSQL(db, opts.Timeout, "CREATE DATABASE "+quoteIdent(name)); err != nil {
+		if mysqlErrorNumber(err) == 1007 {
+			attemptedDB = false
+		}
+		return fail("create database", err)
+	}
+	if err := lock.check(); err != nil {
+		return fail("creation lock lost", err)
+	}
+	attemptedUser = true
 	createUserSQL := "CREATE USER " + quoteUserHost(name, opts.UserHost) +
 		" IDENTIFIED BY '" + escapeSQLStringLiteral(pw) + "'"
-
-	if err := execSQL(ctx, db, createUserSQL); err != nil {
-		createUserErr := fmt.Errorf("create user %s: %w", quoteUserHost(name, opts.UserHost), err)
-		if rbErr := execRollbackSQL(db, "DROP DATABASE "+quoteIdent(name)); rbErr != nil {
-			return nil, fmt.Errorf("%v; rollback failed dropping database %s: %w", createUserErr, name, rbErr)
+	if err := execTimedSQL(db, opts.Timeout, createUserSQL); err != nil {
+		// 1396 can indicate an externally created account. Never delete it.
+		if mysqlErrorNumber(err) == 1396 {
+			attemptedUser = false
 		}
-		return nil, createUserErr
+		return fail("create user", err)
 	}
-
-	// GRANT
-	grantSQL := "GRANT ALL PRIVILEGES ON " + quoteIdent(name) +
+	if err := lock.check(); err != nil {
+		return fail("creation lock lost", err)
+	}
+	grantSQL := "GRANT ALL PRIVILEGES ON " + quoteIdent(strings.ReplaceAll(name, "_", "\\_")) +
 		".* TO " + quoteUserHost(name, opts.UserHost)
-
-	if err := execSQL(ctx, db, grantSQL); err != nil {
-		grantErr := fmt.Errorf("grant privileges for %s: %w", name, err)
-		if rbUserErr := execRollbackSQL(db, "DROP USER "+quoteUserHost(name, opts.UserHost)); rbUserErr != nil {
-			return nil, fmt.Errorf("%v; rollback failed dropping user %s: %w", grantErr, quoteUserHost(name, opts.UserHost), rbUserErr)
-		}
-		if rbDBErr := execRollbackSQL(db, "DROP DATABASE "+quoteIdent(name)); rbDBErr != nil {
-			return nil, fmt.Errorf("%v; rollback failed dropping database %s: %w", grantErr, name, rbDBErr)
-		}
-		return nil, grantErr
+	if err := execTimedSQL(db, opts.Timeout, grantSQL); err != nil {
+		return fail("grant privileges", err)
 	}
 
 	res.Status = StatusCreated
@@ -333,6 +311,7 @@ func processFile(db *sql.DB, opts Options, filename string) error {
 
 	sc := bufio.NewScanner(f)
 	lineNo := 0
+	created, skipped, failed, dryRun := 0, 0, 0, 0
 
 	for sc.Scan() {
 		lineNo++
@@ -351,6 +330,7 @@ func processFile(db *sql.DB, opts Options, filename string) error {
 
 		res, err := processDatabase(db, opts, raw)
 		if err != nil {
+			failed++
 			msg := fmt.Sprintf("Line %d (%s): %v", lineNo, raw, err)
 			fmt.Println("❌", msg)
 			logError(opts.ErrorLogPath, msg)
@@ -364,26 +344,35 @@ func processFile(db *sql.DB, opts Options, filename string) error {
 
 		switch res.Status {
 		case StatusSkipped:
+			skipped++
 			fmt.Printf("⚠️  %s\n", res.Message)
 		case StatusDryRun:
+			dryRun++
 			fmt.Printf("✅ DRY-RUN OK: %s\n", res.Name)
 		case StatusCreated:
+			created++
 			fmt.Printf("✅ Success: %s created.\n", res.Name)
 			fmt.Printf("   Username: %s\n   Host:     %s\n   Password: %s\n",
 				res.Username, res.UserHost, res.Password)
 		}
 	}
 
-	return sc.Err()
+	scanErr := sc.Err()
+	if scanErr != nil {
+		logError(opts.ErrorLogPath, fmt.Sprintf("Batch read failed: %v", scanErr))
+		failed++
+	}
+	fmt.Printf("Batch complete:\nCreated: %d\nSkipped: %d\nFailed: %d\n", created, skipped, failed)
+	if opts.DryRun {
+		fmt.Printf("Dry-run: %d\n", dryRun)
+	}
+	if failed > 0 {
+		return errors.Join(fmt.Errorf("batch had %d failure(s)", failed), scanErr)
+	}
+	return nil
 }
 
 func execSQL(ctx context.Context, db *sql.DB, query string) error {
 	_, err := db.ExecContext(ctx, query)
 	return err
-}
-
-func execRollbackSQL(db *sql.DB, query string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), rollbackTimeout)
-	defer cancel()
-	return execSQL(ctx, db, query)
 }
