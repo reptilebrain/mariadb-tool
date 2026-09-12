@@ -19,14 +19,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Add verified remote TLS, system/custom CA trust, and local Unix sockets.
 - Enforce private file permissions before writing existing config/CSV/log files;
   reject insecure config permissions on POSIX.
+- Open sensitive output files with `O_NOFOLLOW` on Linux/macOS to close the
+  final-component symlink substitution race.
 - Guarantee all four password character classes with cryptographic shuffling.
 - Fail closed on missing/relative XDG or home paths.
+- Reject punctuation-only normalized names before they can become valid encoded
+  database/user identifiers.
 
 ### Changed
 
 - Use collision-free reversible name encoding; reject overlength names rather
   than truncating. Generated names differ from 1.x; review migration guidance.
 - Batch returns non-zero on row/read failures and prints outcome counts.
+- Explicit CSV export failures now return non-zero without rolling back an
+  otherwise successful provisioning; batch reports export failures separately.
 - Use separate deadlines for existence checks and each SQL operation.
 - Upgrade Go to 1.27.1, mysql to 1.10.1, x/term to 0.46.0, and indirect modules.
 - Run integration tests on code PRs/pushes and add race/vulnerability CI checks.
@@ -37,7 +43,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Add regression coverage for ambiguous execution, cleanup/verification failures,
   preexisting resources, lock loss, timeouts, batch summaries, TLS, naming,
-  password policy, and existing-file permissions.
+  password policy, existing-file permissions, and requested CSV export failures.
 
 ------------------------------------------------------------------------
 
@@ -57,7 +63,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Security
 
 -   Rollback now runs in its own context with a separate timeout to reduce partial state risk on timeout
--   Interactive password input in config initialization is now hidden in terminal
+-   Interactive config initialization now hides password input in terminal
 
 ------------------------------------------------------------------------
 
