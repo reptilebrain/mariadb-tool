@@ -56,6 +56,20 @@ func TestNormalizeName(t *testing.T) {
 		seen[got] = input
 	}
 }
+
+func TestNormalizeNameRejectsPunctuationOnlyRawInput(t *testing.T) {
+	for _, input := range []string{".", "---", "___", "._-", "  ._-  "} {
+		if err := validateRawNameForNormalization(input); err == nil {
+			t.Fatalf("expected punctuation-only name %q to be rejected", input)
+		}
+	}
+	for _, input := range []string{"a", "1", "a.-_", "_.9"} {
+		if err := validateRawNameForNormalization(input); err != nil {
+			t.Fatalf("expected %q to be accepted: %v", input, err)
+		}
+	}
+}
+
 func TestNormalizeNameRejectsLongNames(t *testing.T) {
 	if err := validateIdentifier(normalizeName(strings.Repeat("x", 65))); err == nil {
 		t.Fatal("must reject, never truncate")

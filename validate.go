@@ -24,7 +24,8 @@ var (
 	identifierRe = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
 	maxIdentLen  = 64
 
-	rawNormalizeAllowedRe = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
+	rawNormalizeAllowedRe  = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
+	rawNormalizeHasAlnumRe = regexp.MustCompile(`[a-zA-Z0-9]`)
 )
 
 func validateIdentifier(name string) error {
@@ -45,8 +46,8 @@ func quoteIdent(ident string) string {
 	return "`" + ident + "`"
 }
 
-// NEW: Only used when -normalize=true.
-// Purpose: prevent "garbage in" from silently becoming a real db/user.
+// Only used when -normalize=true. Reject garbage input before it can be
+// deterministically encoded into an otherwise valid database/user identifier.
 func validateRawNameForNormalization(input string) error {
 	s := strings.TrimSpace(input)
 	if s == "" {
@@ -54,6 +55,9 @@ func validateRawNameForNormalization(input string) error {
 	}
 	if !rawNormalizeAllowedRe.MatchString(s) {
 		return fmt.Errorf("invalid characters in name '%s' (allowed: a-z A-Z 0-9 . _ -)", input)
+	}
+	if !rawNormalizeHasAlnumRe.MatchString(s) {
+		return fmt.Errorf("invalid name '%s': must contain at least one letter or digit", input)
 	}
 	return nil
 }

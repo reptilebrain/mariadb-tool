@@ -58,9 +58,11 @@ ABC             -> _ca_cb_cc
 
 `.` becomes `_d`, `-` becomes `_h`, `_` becomes `_u`, and uppercase
 letters become `_c` plus the lowercase letter. Whitespace around input is
-trimmed. Invalid input is rejected. Encoded names longer than 64 characters
-are rejected, never truncated or hashed. This prevents normalization collisions,
-including case differences on case-insensitive servers.
+trimmed. Invalid input is rejected. Raw normalized input must contain at least
+one ASCII letter or digit, so punctuation-only values such as `.`, `---`, or
+`._-` are rejected instead of becoming real database/user names. Encoded names
+longer than 64 characters are rejected, never truncated or hashed. This prevents
+normalization collisions, including case differences on case-insensitive servers.
 
 **Migration:** names differ from 1.x. Review `-dry-run` output before upgrading
 automation. Existing names are never renamed, adopted, or modified. To refer to
@@ -171,18 +173,23 @@ test-site.io
 
 Comments (`#` or `;`) and blank lines are ignored.
 Processing continues after row errors. The summary counts Created, Skipped,
-and Failed; dry runs have a separate Dry-run count. Any failed row or input
-read error results in a non-zero process exit status. A skip is not a failure.
+and Failed; dry runs have a separate Dry-run count. When `-export-csv` is used,
+credential-export failures are counted separately. Any failed row, input read
+error, or requested credential-export failure results in a non-zero process
+exit status. A skip is not a failure.
 
 ```text
 Batch complete:
 Created: 8
 Skipped: 2
 Failed: 1
+Export failed: 1
 ```
 
-CSV export errors warn after successful creation; credentials remain on stdout
-and the resource stays counted as Created.
+A CSV export failure happens after successful provisioning, so the created
+resources are not rolled back. Credentials are still printed to stdout, the
+resource remains counted as Created, and the process returns non-zero so
+automation cannot silently treat the missing credential file as success.
 
 ------------------------------------------------------------------------
 
@@ -202,9 +209,11 @@ tls=auto
 On POSIX, the file is enforced to `0600`, including when it already exists.
 Config files with group/other permissions are rejected before parsing;
 fix them with `chmod 600 /path/to/config.ini`. CSV and log files are tightened
-before appending. Symlink output files are rejected. Use trusted parent
-directories. Windows requires suitable account-only NTFS ACLs: Go chmod does
-not enforce POSIX confidentiality there.
+before appending. Symlink output files are rejected. On Linux and macOS,
+sensitive output files are opened with `O_NOFOLLOW`, closing the final-component
+symlink substitution race between checking a path and opening it. Use trusted
+parent directories. Windows requires suitable account-only NTFS ACLs: Go chmod
+does not enforce POSIX confidentiality there.
 
 ------------------------------------------------------------------------
 
@@ -295,6 +304,9 @@ Format:
   -----------------------------------------------------------------------
 
 Existing CSV and log files are also enforced to `0600` before writing on POSIX.
+If an explicitly requested CSV export cannot be written after provisioning, the
+credentials remain on stdout and the command exits non-zero without rolling back
+the successfully created database/user.
 
 ------------------------------------------------------------------------
 

@@ -288,8 +288,8 @@ func processDatabase(db *sql.DB, opts Options, inputName string) (*CreateResult,
 
 	if opts.ExportCSV {
 		if err := saveToCSV(opts.CSVPath, name, name, pw); err != nil {
-			msg := fmt.Sprintf("WARNING: failed to export CSV for %s: %v", name, err)
-			logError(opts.ErrorLogPath, msg)
+			res.Message = fmt.Sprintf("credential export failed for %s: %v", name, err)
+			logError(opts.ErrorLogPath, "WARNING: "+res.Message)
 		} else {
 			res.CSVExported = true
 		}
@@ -311,7 +311,7 @@ func processFile(db *sql.DB, opts Options, filename string) error {
 
 	sc := bufio.NewScanner(f)
 	lineNo := 0
-	created, skipped, failed, dryRun := 0, 0, 0, 0
+	created, skipped, failed, exportFailed, dryRun := 0, 0, 0, 0, 0
 
 	for sc.Scan() {
 		lineNo++
@@ -354,6 +354,14 @@ func processFile(db *sql.DB, opts Options, filename string) error {
 			fmt.Printf("✅ Success: %s created.\n", res.Name)
 			fmt.Printf("   Username: %s\n   Host:     %s\n   Password: %s\n",
 				res.Username, res.UserHost, res.Password)
+			if opts.ExportCSV {
+				if res.CSVExported {
+					fmt.Printf("   Exported:  %s\n", opts.CSVPath)
+				} else {
+					exportFailed++
+					fmt.Printf("⚠️  %s\n", res.Message)
+				}
+			}
 		}
 	}
 
@@ -363,13 +371,24 @@ func processFile(db *sql.DB, opts Options, filename string) error {
 		failed++
 	}
 	fmt.Printf("Batch complete:\nCreated: %d\nSkipped: %d\nFailed: %d\n", created, skipped, failed)
+	if opts.ExportCSV {
+		fmt.Printf("Export failed: %d\n", exportFailed)
+	}
 	if opts.DryRun {
 		fmt.Printf("Dry-run: %d\n", dryRun)
 	}
+
+	var batchErrs []error
 	if failed > 0 {
-		return errors.Join(fmt.Errorf("batch had %d failure(s)", failed), scanErr)
+		batchErrs = append(batchErrs, fmt.Errorf("batch had %d row/read failure(s)", failed))
 	}
-	return nil
+	if exportFailed > 0 {
+		batchErrs = append(batchErrs, fmt.Errorf("batch had %d credential export failure(s)", exportFailed))
+	}
+	if scanErr != nil {
+		batchErrs = append(batchErrs, scanErr)
+	}
+	return errors.Join(batchErrs...)
 }
 
 func execSQL(ctx context.Context, db *sql.DB, query string) error {

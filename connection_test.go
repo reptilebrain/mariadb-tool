@@ -31,6 +31,12 @@ func TestConnectionTLSModes(t *testing.T) {
 			if err != nil {
 				return
 			}
+			if cfg.Collation != "utf8mb4_general_ci" {
+				t.Fatalf("unexpected collation: %q", cfg.Collation)
+			}
+			if _, ok := cfg.Params["charset"]; ok {
+				t.Fatal("charset must not be sent as a server system variable")
+			}
 			if (cfg.TLS != nil) != tc.secure {
 				t.Fatal("wrong TLS mode")
 			}
