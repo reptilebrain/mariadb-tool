@@ -31,7 +31,7 @@ func logError(path, msg string) {
 		return
 	}
 
-	// 0600: log may contain sensitive operational info
+	// 0600: log may contain sensitive operational info.
 	f, err := openPrivateFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Cannot open private error log:", err)
@@ -54,7 +54,7 @@ func saveToCSV(path, dbName, userName, password string) error {
 		return err
 	}
 
-	// 0600: CSV contains credentials
+	// 0600: CSV contains credentials.
 	f, err := openPrivateFile(path, os.O_APPEND|os.O_CREATE|os.O_RDWR)
 	if err != nil {
 		return err
@@ -86,38 +86,6 @@ func saveToCSV(path, dbName, userName, password string) error {
 	return w.Error()
 }
 
-// Parent directories must be trusted: reject symlinks and tighten existing files
-// before writing. Do not truncate a credential file until chmod succeeds.
-func openPrivateFile(path string, flags int) (*os.File, error) {
-	info, err := os.Lstat(path)
-	if err == nil && !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("private file must be regular: %s", path)
-	}
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, err
-	}
-	f, err := os.OpenFile(path, flags&^os.O_TRUNC, 0600)
-	if err != nil {
-		return nil, err
-	}
-	fail := func(err error) (*os.File, error) { f.Close(); return nil, err }
-	opened, err := f.Stat()
-	if err != nil {
-		return fail(err)
-	}
-	if !opened.Mode().IsRegular() || (info != nil && !os.SameFile(info, opened)) {
-		return fail(fmt.Errorf("private file changed while opening: %s", path))
-	}
-	if err := f.Chmod(0600); err != nil {
-		return fail(err)
-	}
-	if flags&os.O_TRUNC != 0 {
-		if err := f.Truncate(0); err != nil {
-			return fail(err)
-		}
-	}
-	return f, nil
-}
 func writePrivateFile(path string, data []byte) error {
 	f, err := openPrivateFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC)
 	if err != nil {
@@ -126,6 +94,7 @@ func writePrivateFile(path string, data []byte) error {
 	_, writeErr := f.Write(data)
 	return errors.Join(writeErr, f.Close())
 }
+
 func checkConfigPermissions(f *os.File) error {
 	info, err := f.Stat()
 	if err != nil {
