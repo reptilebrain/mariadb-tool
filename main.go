@@ -69,6 +69,11 @@ func main() {
 			log.Fatalf("Failed: %v", err)
 		}
 		printResult(opts, res)
+		if err := credentialExportError(opts, res); err != nil {
+			// Creation succeeded and credentials have already been printed. Do not
+			// roll back the resources, but signal failure to automation.
+			log.Fatalf("Created resources, but %v", err)
+		}
 
 	case opts.FileList != "":
 		if err := processFile(db, opts, opts.FileList); err != nil {
@@ -127,6 +132,16 @@ func parseFlags() Options {
 	return opts
 }
 
+func credentialExportError(opts Options, res *CreateResult) error {
+	if !opts.ExportCSV || res == nil || res.Status != StatusCreated || res.CSVExported {
+		return nil
+	}
+	if res.Message != "" {
+		return fmt.Errorf("%s", res.Message)
+	}
+	return fmt.Errorf("credential export failed")
+}
+
 func printResult(opts Options, res *CreateResult) {
 	if res == nil {
 		return
@@ -144,8 +159,12 @@ func printResult(opts Options, res *CreateResult) {
 	case StatusCreated:
 		fmt.Printf("✅ Success: %s created.\n", res.Name)
 		fmt.Printf("   Username: %s\n   Host:     %s\n   Password: %s\n", res.Username, res.UserHost, res.Password)
-		if opts.ExportCSV && res.CSVExported {
-			fmt.Printf("   Exported:  %s\n", opts.CSVPath)
+		if opts.ExportCSV {
+			if res.CSVExported {
+				fmt.Printf("   Exported:  %s\n", opts.CSVPath)
+			} else {
+				fmt.Printf("⚠️  %s\n", res.Message)
+			}
 		}
 	}
 }
