@@ -44,6 +44,15 @@ func main() {
 		log.Fatalf("Error reading config: %v", err)
 	}
 
+	if opts.TLS != "" {
+		cfg["tls"] = opts.TLS
+	}
+	if opts.TLSCA != "" {
+		cfg["tls-ca"] = opts.TLSCA
+	}
+	if opts.Socket != "" {
+		cfg["socket"] = opts.Socket
+	}
 	db, err := openDB(cfg, opts.Timeout)
 	if err != nil {
 		logError(opts.ErrorLogPath, fmt.Sprintf("DB connect failed: %v", err))
@@ -74,13 +83,8 @@ func main() {
 
 func parseFlags() Options {
 	dp, err := defaultPaths()
-	if err != nil || validateNotEmptyPaths(dp) != nil {
-		// Last-resort fallback if we can't resolve XDG paths
-		dp = DefaultPaths{
-			ConfigPath: "config.ini",
-			ErrorLog:   "error.log",
-			CSVPath:    "accounts.csv",
-		}
+	if err != nil {
+		dp = DefaultPaths{}
 	}
 
 	var opts Options
@@ -101,7 +105,7 @@ func parseFlags() Options {
 	flag.StringVar(&opts.ErrorLogPath, "error-log", dp.ErrorLog, "Error log path")
 	flag.BoolVar(&opts.DryRun, "dry-run", false, "Show what would be done, but do not execute changes")
 
-	flag.BoolVar(&opts.Normalize, "normalize", true, "Normalize input names (e.g. hardhq.com -> hardhq_com)")
+	flag.BoolVar(&opts.Normalize, "normalize", true, "Encode names without collisions (e.g. example.com -> example_dcom)")
 
 	flag.Usage = func() {
 		fmt.Println("Usage:")
@@ -113,7 +117,13 @@ func parseFlags() Options {
 		flag.PrintDefaults()
 	}
 
+	flag.StringVar(&opts.TLS, "tls", "", "TLS: auto (remote verified, loopback plaintext), true (verified), false (explicit plaintext)")
+	flag.StringVar(&opts.TLSCA, "tls-ca", "", "PEM CA file; enables verified TLS")
+	flag.StringVar(&opts.Socket, "socket", "", "Unix socket path instead of TCP")
 	flag.Parse()
+	if opts.ConfigPath == "" || opts.ErrorLogPath == "" || (opts.ExportCSV && opts.CSVPath == "") {
+		log.Fatal("Cannot resolve private file paths; set absolute XDG/home directories or explicit -config, -error-log and (when exporting) -csv paths")
+	}
 	return opts
 }
 

@@ -35,11 +35,17 @@ type DefaultPaths struct {
 
 func xdgDir(envVar string, fallbackParts ...string) (string, error) {
 	if v := strings.TrimSpace(os.Getenv(envVar)); v != "" {
+		if !filepath.IsAbs(v) {
+			return "", fmt.Errorf("%s must be absolute", envVar)
+		}
 		return v, nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
+	}
+	if !filepath.IsAbs(home) {
+		return "", errors.New("home directory must be absolute")
 	}
 	parts := append([]string{home}, fallbackParts...)
 	return filepath.Join(parts...), nil
@@ -84,6 +90,9 @@ func loadConfig(filename, section string) (map[string]string, error) {
 		return nil, err
 	}
 	defer file.Close()
+	if err := checkConfigPermissions(file); err != nil {
+		return nil, err
+	}
 
 	wantSection := "[" + section + "]"
 	inSection := false
@@ -164,12 +173,12 @@ func initializeConfig(path string) error {
 	}
 
 	content := fmt.Sprintf(
-		"[mariadb]\nusername=%s\npassword=%s\nhostname=%s\nport=%s\n",
+		"[mariadb]\nusername=%s\npassword=%s\nhostname=%s\nport=%s\ntls=auto\n",
 		user, pass, host, port,
 	)
 
 	// 0600 because it contains creds
-	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+	if err := writePrivateFile(path, []byte(content)); err != nil {
 		return err
 	}
 

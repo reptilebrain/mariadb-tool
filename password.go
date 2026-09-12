@@ -15,23 +15,36 @@ package main
 
 import (
 	"crypto/rand"
+	"fmt"
 	"math/big"
-	"strings"
 )
 
 const passwordAlphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!#%&"
 
 func generatePassword(n int) (string, error) {
-	var sb strings.Builder
-	sb.Grow(n)
-
-	max := big.NewInt(int64(len(passwordAlphabet)))
-	for i := 0; i < n; i++ {
-		r, err := rand.Int(rand.Reader, max)
+	if n < 4 {
+		return "", fmt.Errorf("password length must be at least 4")
+	}
+	classes := []string{"abcdefghijklmnopqrstuvwxyz", "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "0123456789", "!#%&"}
+	password := make([]byte, n)
+	for i := range password {
+		alphabet := passwordAlphabet
+		if i < len(classes) {
+			alphabet = classes[i]
+		}
+		r, err := rand.Int(rand.Reader, big.NewInt(int64(len(alphabet))))
 		if err != nil {
 			return "", err
 		}
-		sb.WriteByte(passwordAlphabet[r.Int64()])
+		password[i] = alphabet[r.Int64()]
 	}
-	return sb.String(), nil
+	for i := n - 1; i > 0; i-- {
+		r, err := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
+		if err != nil {
+			return "", err
+		}
+		j := int(r.Int64())
+		password[i], password[j] = password[j], password[i]
+	}
+	return string(password), nil
 }

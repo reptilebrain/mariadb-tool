@@ -14,8 +14,6 @@
 package main
 
 import (
-	"crypto/sha1"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"regexp"
@@ -26,12 +24,6 @@ var (
 	identifierRe = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
 	maxIdentLen  = 64
 
-	// For normalization
-	nonAZ09_        = regexp.MustCompile(`[^a-z0-9_]+`)
-	multiUnderscore = regexp.MustCompile(`_+`)
-
-	// NEW: raw input allowed chars when -normalize=true
-	// Allows typical domain-ish inputs: letters, digits, dot, dash, underscore
 	rawNormalizeAllowedRe = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 )
 
@@ -66,35 +58,24 @@ func validateRawNameForNormalization(input string) error {
 	return nil
 }
 
-// normalizeName converts common inputs (domains, etc.) to safe identifiers.
+// normalizeName is injective for validated, trimmed input, including case.
+// Never truncate: validateIdentifier rejects encoded names longer than 64 bytes.
 func normalizeName(input string) string {
-	raw := strings.TrimSpace(input)
-	if raw == "" {
-		return ""
+	var b strings.Builder
+	for _, c := range strings.TrimSpace(input) {
+		switch {
+		case c == '_':
+			b.WriteString("_u")
+		case c == '.':
+			b.WriteString("_d")
+		case c == '-':
+			b.WriteString("_h")
+		case c >= 'A' && c <= 'Z':
+			b.WriteString("_c")
+			b.WriteRune(c + ('a' - 'A'))
+		default:
+			b.WriteRune(c)
+		}
 	}
-
-	s := strings.ToLower(raw)
-	s = strings.ReplaceAll(s, ".", "_")
-	s = strings.ReplaceAll(s, "-", "_")
-
-	s = nonAZ09_.ReplaceAllString(s, "_")
-	s = multiUnderscore.ReplaceAllString(s, "_")
-	s = strings.Trim(s, "_")
-
-	if s == "" {
-		return ""
-	}
-
-	if len(s) <= maxIdentLen {
-		return s
-	}
-
-	h := sha1.Sum([]byte(raw))
-	suffix := hex.EncodeToString(h[:])[:8] // 8 hex chars
-
-	baseLen := maxIdentLen - 1 - len(suffix) // "_" + suffix
-	if baseLen < 1 {
-		return s[:maxIdentLen]
-	}
-	return s[:baseLen] + "_" + suffix
+	return b.String()
 }

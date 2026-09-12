@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"strings"
@@ -21,13 +22,12 @@ func TestProcessDatabaseMariaDBIntegration(t *testing.T) {
 
 	containerName := fmt.Sprintf("mariadb-tool-it-%d", time.Now().UnixNano())
 	rootPassword := "testrootpass"
-	port := "33316"
 
 	run := exec.Command(
 		"docker", "run", "-d",
 		"--name", containerName,
 		"-e", "MARIADB_ROOT_PASSWORD="+rootPassword,
-		"-p", port+":3306",
+		"-p", "127.0.0.1::3306",
 		"mariadb:11",
 	)
 	out, err := run.CombinedOutput()
@@ -38,6 +38,15 @@ func TestProcessDatabaseMariaDBIntegration(t *testing.T) {
 		cmd := exec.Command("docker", "rm", "-f", containerName)
 		_, _ = cmd.CombinedOutput()
 	})
+
+	portOut, err := exec.Command("docker", "port", containerName, "3306/tcp").Output()
+	if err != nil {
+		t.Fatalf("discover container port: %v", err)
+	}
+	_, port, err := net.SplitHostPort(strings.TrimSpace(string(portOut)))
+	if err != nil {
+		t.Fatalf("parse container port: %v", err)
+	}
 
 	cfg := map[string]string{
 		"username": "root",
@@ -73,7 +82,7 @@ func TestProcessDatabaseMariaDBIntegration(t *testing.T) {
 	if res.Status != StatusCreated {
 		t.Fatalf("unexpected status: got %v want %v", res.Status, StatusCreated)
 	}
-	if res.Name != "example_com" {
+	if res.Name != "example_dcom" {
 		t.Fatalf("unexpected normalized name: got %q", res.Name)
 	}
 
@@ -103,4 +112,52 @@ func TestProcessDatabaseMariaDBIntegration(t *testing.T) {
 	if userCount != 1 {
 		t.Fatalf("expected created user to exist, count=%d", userCount)
 	}
+	// An identical request must leave the existing pair untouched.
+	repeated, err := processDatabase(db, opts, "example.com")
+	if err != nil || repeated.Status != StatusSkipped {
+		t.Fatalf("repeat: %v", err)
+	}
+
+	// Database-level grants must store escaped underscores, not wildcards.
+	var grantedDB string
+	if err := db.QueryRowContext(ctx, "SELECT Db FROM mysql.db WHERE User = ? AND Host = ?", res.Name, opts.UserHost).Scan(&grantedDB); err != nil {
+		t.Fatal(err)
+	}
+	if grantedDB != strings.ReplaceAll(res.Name, "_", "\\_") {
+		t.Fatalf("overbroad grant: %q", grantedDB)
+	}
+
+	for _, tc := range []struct{ name, statement string }{
+		{"preexistingdb", "CREATE DATABASE " + quoteIdent("preexistingdb")},
+		{"preexistinguser", "CREATE USER " + quoteUserHost("preexistinguser", "localhost")},
+	} {
+		if err := execTimedSQL(db, opts.Timeout, tc.statement); err != nil {
+			t.Fatal(err)
+		}
+		result, err := processDatabase(db, opts, tc.name)
+		if err != nil || result.Status != StatusSkipped {
+			t.Fatalf("existing resource: %v", err)
+		}
+		d, err := databaseExistsTimed(db, tc.name, opts.Timeout)
+		if err != nil {
+			t.Fatal(err)
+		}
+		u, err := userExistsTimed(db, tc.name, opts.UserHost, opts.Timeout)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d != (tc.name == "preexistingdb") || u != (tc.name == "preexistinguser") {
+			t.Fatal("existing resource changed")
+		}
+	}
+	held, err := acquireNameLock(db, "lockedname", opts.Timeout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, lockErr := processDatabase(db, opts, "lockedname")
+	held.close()
+	if lockErr == nil {
+		t.Fatal("concurrent name lock was ignored")
+	}
+
 }

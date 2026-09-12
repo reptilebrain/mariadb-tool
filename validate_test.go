@@ -37,42 +37,52 @@ func TestValidateIdentifier(t *testing.T) {
 
 func TestNormalizeName(t *testing.T) {
 	cases := map[string]string{
-		"hardhq.com":        "hardhq_com",
-		"my-site.se":        "my_site_se",
-		"WWW.Example.COM":   "www_example_com",
-		"  a..b---c  ":      "a_b_c",
-		"___Already__Ok___": "already_ok",
+		"example.com": "example_dcom", "foo-bar.com": "foo_hbar_dcom",
+		"foo.bar.com": "foo_dbar_dcom", "foo_dbar.com": "foo_udbar_dcom",
+		"ABC": "_ca_cb_cc", "abc": "abc", "  x_y  ": "x_uy",
 	}
-
-	for in, want := range cases {
-		got := normalizeName(in)
+	seen := map[string]string{}
+	for input, want := range cases {
+		got := normalizeName(input)
 		if got != want {
-			t.Fatalf("normalizeName(%q)=%q, want %q", in, got, want)
+			t.Fatalf("%q: got %q want %q", input, got, want)
 		}
-		if got != "" {
-			if err := validateIdentifier(got); err != nil {
-				t.Fatalf("normalized value should validate: %q err=%v", got, err)
+		if err := validateIdentifier(got); err != nil {
+			t.Fatal(err)
+		}
+		if previous, ok := seen[got]; ok {
+			t.Fatalf("collision: %s and %s", previous, input)
+		}
+		seen[got] = input
+	}
+}
+func TestNormalizeNameRejectsLongNames(t *testing.T) {
+	if err := validateIdentifier(normalizeName(strings.Repeat("x", 65))); err == nil {
+		t.Fatal("must reject, never truncate")
+	}
+	if err := validateIdentifier(normalizeName(strings.Repeat(".", 33))); err == nil {
+		t.Fatal("must reject expanded names")
+	}
+}
+func TestNormalizationInjective(t *testing.T) {
+	seen := map[string]string{}
+	alphabet := "aA._-0"
+	var visit func(string, int)
+	visit = func(raw string, depth int) {
+		if raw != "" {
+			got := normalizeName(raw)
+			if prev, ok := seen[got]; ok && prev != raw {
+				t.Fatalf("collision %q %q", prev, raw)
+			}
+			seen[got] = raw
+		}
+		if depth > 0 {
+			for _, c := range alphabet {
+				visit(raw+string(c), depth-1)
 			}
 		}
 	}
-}
-
-func TestNormalizeNameTruncatesWithHash(t *testing.T) {
-	in := "this-is-a-very-long-domain-name-that-should-definitely-exceed-sixty-four-characters.example.com"
-	got := normalizeName(in)
-	if got == "" {
-		t.Fatal("expected non-empty normalized name")
-	}
-	if len(got) > maxIdentLen {
-		t.Fatalf("expected <= %d chars, got %d (%q)", maxIdentLen, len(got), got)
-	}
-	if err := validateIdentifier(got); err != nil {
-		t.Fatalf("normalized value should validate: %q err=%v", got, err)
-	}
-	// Heuristic: should contain "_" + 8 hex chars suffix when truncated
-	if len(got) == maxIdentLen && got[len(got)-9] != '_' {
-		t.Fatalf("expected hash suffix pattern in %q", got)
-	}
+	visit("", 4)
 }
 
 func TestValidateUserHostWildcardPolicy(t *testing.T) {
