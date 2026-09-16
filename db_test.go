@@ -16,6 +16,7 @@ import (
 )
 
 type fakeState struct {
+	contexts                 []context.Context
 	acquireErr               error
 	lockKeys                 []string
 	mu                       sync.Mutex
@@ -82,6 +83,7 @@ func (c *fakeConn) QueryContext(ctx context.Context, q string, args []driver.Nam
 		}
 		if d, ok := ctx.Deadline(); ok {
 			s.deadlines = append(s.deadlines, time.Until(d))
+			s.contexts = append(s.contexts, ctx)
 		} else {
 			return nil, errors.New("missing deadline")
 		}
@@ -112,6 +114,7 @@ func (c *fakeConn) ExecContext(ctx context.Context, q string, _ []driver.NamedVa
 		return nil, errors.New("missing deadline")
 	}
 	s.deadlines = append(s.deadlines, time.Until(d))
+	s.contexts = append(s.contexts, ctx)
 	failed := s.failure != "" && strings.HasPrefix(q, s.failure)
 	if !failed || s.applyFailure {
 		switch {
@@ -229,14 +232,27 @@ func TestAlreadyExistsRacePreservesResource(t *testing.T) {
 	}
 }
 func TestIndependentOperationTimeouts(t *testing.T) {
-	s := &fakeState{delay: 40 * time.Millisecond}
-	res, err := processDatabase(fakeDB(t, s), Options{Timeout: 70 * time.Millisecond}, "example")
+	s := &fakeState{}
+	res, err := processDatabase(fakeDB(t, s), Options{Timeout: time.Second}, "example")
 	if err != nil || res.Status != StatusCreated {
-		t.Fatalf("operations shared a timeout: %v", err)
+		t.Fatalf("creation failed: %v", err)
 	}
-	for _, remaining := range s.deadlines {
-		if remaining < 50*time.Millisecond {
-			t.Fatalf("stale operation deadline: %s", remaining)
+	// Observe each query/DDL context directly rather than relying on short
+	// wall-clock thresholds that can flake on loaded Windows/macOS runners.
+	if len(s.contexts) != 5 {
+		t.Fatalf("got %d operation contexts, want 5", len(s.contexts))
+	}
+	seen := map[context.Context]bool{}
+	for _, ctx := range s.contexts {
+		if _, ok := ctx.Deadline(); !ok {
+			t.Fatal("operation has no deadline")
+		}
+		if seen[ctx] {
+			t.Fatal("operations share a timeout context")
+		}
+		seen[ctx] = true
+		if !errors.Is(ctx.Err(), context.Canceled) {
+			t.Fatal("operation context was not canceled after use")
 		}
 	}
 }
@@ -284,7 +300,7 @@ func captureStdout(t *testing.T, fn func()) string {
 		t.Fatal(err)
 	}
 	os.Stdout = f
-	defer func() { os.Stdout = old; f.Close() }()
+	t.Cleanup(func() { os.Stdout = old; f.Close() })
 	fn()
 	os.Stdout = old
 	if _, err := f.Seek(0, 0); err != nil {

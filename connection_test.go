@@ -57,7 +57,7 @@ func TestConnectionTLSModes(t *testing.T) {
 }
 func TestCustomCAAndSocket(t *testing.T) {
 	server := httptest.NewTLSServer(nil)
-	defer server.Close()
+	t.Cleanup(server.Close)
 	cert := server.Certificate()
 	path := filepath.Join(t.TempDir(), "ca.pem")
 	os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}), 0600)
@@ -94,7 +94,7 @@ func TestCustomCAAndSocket(t *testing.T) {
 
 func TestTLSHandshakeVerification(t *testing.T) {
 	server := httptest.NewTLSServer(nil)
-	defer server.Close()
+	t.Cleanup(server.Close)
 	address := strings.TrimPrefix(server.URL, "https://")
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
@@ -128,5 +128,24 @@ func TestTLSHandshakeVerification(t *testing.T) {
 	untrusted.RootCAs = x509.NewCertPool()
 	if err := dial(untrusted); err == nil {
 		t.Fatal("unknown CA accepted")
+	}
+}
+
+func TestConnectionConfigurationErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		values map[string]string
+	}{
+		{"missing username", map[string]string{"hostname": "localhost", "port": "3306"}},
+		{"missing hostname", map[string]string{"username": "admin", "port": "3306"}},
+		{"missing port", map[string]string{"username": "admin", "hostname": "localhost"}},
+		{"relative socket", map[string]string{"username": "admin", "socket": "relative.sock"}},
+		{"missing CA", map[string]string{"username": "admin", "hostname": "localhost", "port": "3306", "tls-ca": filepath.Join(t.TempDir(), "missing CA.pem")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := connectionConfig(tc.values, time.Second); err == nil {
+				t.Fatal("expected configuration error")
+			}
+		})
 	}
 }
