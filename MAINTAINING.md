@@ -56,6 +56,7 @@ go test ./... -run TestProcessDatabaseMariaDBIntegration -count=1 -v
   - Linux: CGO-enabled race tests with GCC, module checks, govulncheck
   - No secrets or real services; opt-in database integration is explicitly disabled
   - Only contents: read; no documentation path filter, so required checks can run
+  - .gitattributes keeps Go files at LF on Windows for the read-only gofmt check
 - `Integration` workflow:
   - Trigger: code/module/workflow pushes to main and PRs, nightly, manual
   - Runs Docker-backed MariaDB integration test
