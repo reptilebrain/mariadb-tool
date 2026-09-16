@@ -1,2 +1,4 @@
 # gofmt emits LF on every platform; keep Windows checkouts consistent.
 *.go text eol=lf
+*.sh text eol=lf
+*.svg text eol=lf

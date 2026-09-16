@@ -6,6 +6,10 @@
 [![Release](https://img.shields.io/github/v/tag/reptilebrain/mariadb-tool?sort=semver)](https://github.com/reptilebrain/mariadb-tool/releases)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/reptilebrain/mariadb-tool)](https://go.dev/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+[![Linux unit statement coverage](.github/badges/coverage.svg)](#test-coverage)
+[![Linux](https://img.shields.io/badge/Linux-supported-blue)](https://github.com/reptilebrain/mariadb-tool/releases)
+[![Windows](https://img.shields.io/badge/Windows-supported-blue)](https://github.com/reptilebrain/mariadb-tool/releases)
+[![macOS](https://img.shields.io/badge/macOS-supported-blue)](https://github.com/reptilebrain/mariadb-tool/releases)
 
 See [CHANGELOG.md](CHANGELOG.md) for version history.
 
@@ -345,6 +349,18 @@ network behavior, interactive terminal handling, or Windows ACL confidentiality.
 POSIX permission/symlink assertions are skipped on Windows. Dry-run assertions
 exercise provisioning and batch functions; first-run CLI config initialization
 and interactive prompts are outside this coverage.
+
+### Test coverage
+
+The coverage badge records Linux **unit-test statement coverage**, measured with
+the Go version in go.mod. CI regenerates it into a temporary file and rejects a
+stale badge; it never commits or pushes updates. It is a coverage measurement,
+not a code-quality grade or security guarantee. MariaDB integration coverage is
+not included, and OS-specific code can have different coverage.
+
+The Linux test job provides the per-function report in its summary and a
+downloadable coverage.out artifact (14-day retention). See MAINTAINING.md for the
+badge-update command. No external coverage account or token is required.
 
 ## Automation
 
