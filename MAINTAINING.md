@@ -12,10 +12,12 @@ This document describes how to maintain this repository safely and consistently.
 ## Branch and PR Flow
 
 - Develop changes in a feature branch.
-- Open a pull request to `main`.
+- Open a pull request to `main` describing changes, validation, simulated failures, and coverage limits. Automated contributors must not merge the PR themselves.
 - Ensure CI is green:
   - `go vet ./...`
   - `go test ./... -count=1`
+  - `go build ./...`
+  - Formatting and the Linux race check
 - Prefer squash merge unless preserving commit history is explicitly needed.
 
 ## Testing Policy
@@ -48,9 +50,13 @@ go test ./... -run TestProcessDatabaseMariaDBIntegration -count=1 -v
 
 ## GitHub Automation
 
-- `CI` workflow:
-  - Trigger: push to `main`, pull requests
-  - Runs vet, unit/race tests, format/module checks, and govulncheck
+- `Tests` workflow (`.github/workflows/tests.yml`):
+  - Trigger: push to `main`, pull requests targeting `main`, manual dispatch
+  - Linux, Windows, macOS: read-only gofmt check, vet, unit tests, build
+  - Linux: CGO-enabled race tests with GCC, module checks, govulncheck
+  - No secrets or real services; opt-in database integration is explicitly disabled
+  - Only contents: read; no documentation path filter, so required checks can run
+  - .gitattributes keeps Go files at LF on Windows for the read-only gofmt check
 - `Integration` workflow:
   - Trigger: code/module/workflow pushes to main and PRs, nightly, manual
   - Runs Docker-backed MariaDB integration test
@@ -101,7 +107,31 @@ git push origin vX.Y.Z
 - Docker integration requires a running daemon, not just a docker executable.
 - Actions are pinned to verified commits. Verify upstream tags before changing pins.
 - Only the release publishing job receives contents: write.
-- Documentation-only changes skip CI via path filters; do not configure skipped
-  workflows as unconditional required checks without accounting for that behavior.
+- Tests runs even for documentation-only changes. Integration retains path filters;
+  do not require that filtered workflow unconditionally without accounting for skips.
+- When replacing the old CI workflow, update branch-protection check names to the
+  Tests matrix jobs; repository protection settings are not changed by this PR.
 - A successful local cross-build does not verify GitHub permissions or actual
   asset publication; verify these on the next authorized release.
+
+
+## Test isolation and scope
+
+Use `t.TempDir()` for all fixtures and `t.Setenv()` for environment changes;
+do not run tests that change environment or standard streams in parallel.
+Register database doubles and local TLS servers with `t.Cleanup()`. Do not use
+real credentials, home directories, or a developer's running database in unit tests.
+Use a regular file blocking a parent directory or a directory as an output target
+to simulate portable filesystem failures instead of relying on root/admin-sensitive
+permission denial.
+
+Provisioning tests share the in-memory SQL driver, including timeout/EOF,
+already-exists, failed DROP, failed verification, and lost-lock scenarios.
+TLS tests use an ephemeral local server and test certificates. File tests cover
+spaced paths, read failures, dry-run outputs, original input bytes, and CSV
+round trips. There is no data-import command; batch-list reads and credential
+exports are the applicable file-integrity cases.
+
+Real MariaDB behavior belongs to the separate isolated Docker integration workflow.
+Windows mode-bit tests are skipped because NTFS ACL guarantees differ. No unit
+test claims to validate production networking, interactive prompts, or ACL setup.

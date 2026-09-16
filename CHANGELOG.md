@@ -8,6 +8,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ------------------------------------------------------------------------
 
+## [Unreleased]
+
+### Testing
+
+- Replace overlapping CI with tests.yml for main PRs/pushes and manual runs.
+- Run formatting, vet, unit tests and builds on Linux, Windows and macOS;
+  retain Linux race, module metadata and vulnerability checks.
+- Add isolated dry-run, spaced-path, config/read-error and file-integrity tests.
+- Verify independent operation contexts without fragile timing thresholds.
+- No application functionality changes.
+
+------------------------------------------------------------------------
+
 ## [2.0.0] - 2026-09-12
 
 ### Security

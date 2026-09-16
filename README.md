@@ -1,6 +1,6 @@
 # MariaDB User & Database Creator
 
-[![CI](https://github.com/reptilebrain/mariadb-tool/actions/workflows/ci.yml/badge.svg)](https://github.com/reptilebrain/mariadb-tool/actions/workflows/ci.yml)
+[![Tests](https://github.com/reptilebrain/mariadb-tool/actions/workflows/tests.yml/badge.svg)](https://github.com/reptilebrain/mariadb-tool/actions/workflows/tests.yml)
 [![Integration](https://github.com/reptilebrain/mariadb-tool/actions/workflows/integration.yml/badge.svg)](https://github.com/reptilebrain/mariadb-tool/actions/workflows/integration.yml)
 [![Release Workflow](https://github.com/reptilebrain/mariadb-tool/actions/workflows/release.yml/badge.svg)](https://github.com/reptilebrain/mariadb-tool/actions/workflows/release.yml)
 [![Release](https://img.shields.io/github/v/tag/reptilebrain/mariadb-tool?sort=semver)](https://github.com/reptilebrain/mariadb-tool/releases)
@@ -328,11 +328,27 @@ self-service.
 
 ## Testing
 
-Tested against MariaDB using isolated Docker environments.
+The default unit suite uses a fake SQL driver and local `httptest` TLS servers.
+Files use `t.TempDir()`, and environment overrides use `t.Setenv()` without
+parallel environment-mutating tests. No database, Docker, credentials, or user
+configuration is needed. The Tests workflow explicitly disables both opt-in
+database integration modes.
+
+Coverage includes configuration and connection errors, dry run without DDL or
+output writes, preexisting names and creation races, paths containing spaces,
+unchanged config/batch input bytes, append-only CSV integrity, batch read/export
+failures, TLS verification, passwords, and reconciliation failures.
+Database-specific integration remains a separate Docker workflow.
+
+Unit tests do not establish real MariaDB DDL/privilege semantics, production
+network behavior, interactive terminal handling, or Windows ACL confidentiality.
+POSIX permission/symlink assertions are skipped on Windows. Dry-run assertions
+exercise provisioning and batch functions; first-run CLI config initialization
+and interactive prompts are outside this coverage.
 
 ## Automation
 
--   **CI** (`.github/workflows/ci.yml`) runs on push to `main` and pull requests (`go vet`, unit/race tests, module/format checks, and `govulncheck`).
+-   **Tests** (`.github/workflows/tests.yml`) runs on PRs targeting `main`, pushes to `main`, and manual dispatch. Linux, Windows, and macOS each check formatting without rewriting files, run `go vet`, unit tests, and `go build`. Linux also runs race tests, module metadata checks, and `govulncheck`. Permissions are limited to `contents: read`.
 -   **Integration** (`.github/workflows/integration.yml`) runs on relevant main pushes and PRs, nightly, and manually. Code/module/workflow path filters avoid database tests for documentation-only changes.
 -   **Release** (`.github/workflows/release.yml`) runs on tag pushes (`v*`) and publishes Linux/macOS amd64/arm64 and Windows amd64 archives plus SHA256SUMS. All five archives must exist; only the publishing job has contents write permission.
 
