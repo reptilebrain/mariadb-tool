@@ -135,3 +135,26 @@ exports are the applicable file-integrity cases.
 Real MariaDB behavior belongs to the separate isolated Docker integration workflow.
 Windows mode-bit tests are skipped because NTFS ACL guarantees differ. No unit
 test claims to validate production networking, interactive prompts, or ACL setup.
+
+## Coverage badge updates
+
+The README badge is a versioned Linux unit statement-coverage measurement, not
+an external rating. The Tests workflow compares it against each Linux run.
+When code or tests change the percentage, regenerate it locally on Linux/WSL
+using the Go version from go.mod and commit the updated SVG in the same PR:
+
+```bash
+MARIADB_TOOL_INTEGRATION=0 MARIADB_TOOL_LOCAL_INTEGRATION=0 \
+  go test ./... -count=1 -coverprofile=coverage.out -covermode=atomic
+bash .github/scripts/coverage-badge.sh coverage.out > .github/badges/coverage.svg
+```
+
+CI writes the generated candidate under RUNNER_TEMP and keeps contents: read.
+It uploads the Linux profile as the linux-unit-coverage artifact and includes
+per-function results in the job summary. To inspect a downloaded profile against
+the matching commit, run `go tool cover -html=coverage.out`. Profiles contain
+source locations and execution counts, not test credentials.
+
+Platform badges reflect the existing release matrix. Go Report Card was sunset
+on July 1, 2026, so the README deliberately uses the live Tests workflow as its
+quality-check link instead of adding a broken external rating badge.

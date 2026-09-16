@@ -10,6 +10,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Documentation
+
+- Add Linux/Windows/macOS support badges and a measured unit-coverage badge.
+- Verify the coverage badge in Linux CI and publish the profile/report without
+  additional secrets, accounts, or repository write permissions.
+
 ### Testing
 
 - Replace overlapping CI with tests.yml for main PRs/pushes and manual runs.
